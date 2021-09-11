@@ -2319,7 +2319,7 @@ static void bestlineEditXlatWord(struct bestlineState *l, int xlat(int)) {
         if ((c = xlat(r.c)) != r.c) {
             abAppendw(&ab, EncodeUtf8(c));
         } else { /* avoid canonicalization */
-            abAppend(&ab, l->buf + j, l->len - j);
+            abAppend(&ab, l->buf + j, r.n);
         }
     }
     if (ab.len && i + ab.len + l->len - j < l->buflen) {

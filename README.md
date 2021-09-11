@@ -106,11 +106,11 @@ Here's what we've changed compared to
 
 This codebase aims to follow in Antirez's tradition of writing beautiful
 programs, that solve extremely difficult difficult technical problems in
-simplest most elegant way possible. The original Linenoise source code
-is sort of like an old Delorean where it's simple and beautiful, but has
-a lot of things broken about it that need to be fixed, which gives you
-plenty of reasons to sit down and fix things to fully appreciate its
-beauty.
+the simplest most elegant way possible. The original Linenoise source
+code is sort of like an old Delorean where it's simple and beautiful,
+but has a lot of things broken about it that need to be fixed, which
+gives you plenty of reasons to sit down and fix things to fully
+appreciate its beauty.
 
 There are however some differences in style. Antirez generally optimizes
 for fewer lines of code even if it makes the binary footprint larger and
