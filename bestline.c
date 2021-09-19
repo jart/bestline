@@ -118,7 +118,8 @@
 #include "bestline.h"
 
 #ifndef __COSMOPOLITAN__
-#define _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 1
+#define _XOPEN_SOURCE 700
 #include <termios.h>
 #include <unistd.h>
 #include <stdlib.h>
