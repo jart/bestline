@@ -186,20 +186,21 @@ struct bestlineRing {
  * We pass this state to functions implementing specific editing
  * functionalities. */
 struct bestlineState {
-    int ifd;            /* Terminal stdin file descriptor */
-    int ofd;            /* Terminal stdout file descriptor */
-    struct winsize ws;  /* Rows and columns in terminal */
-    char *buf;          /* Edited line buffer */
-    const char *prompt; /* Prompt to display */
+    int ifd;            /* terminal stdin file descriptor */
+    int ofd;            /* terminal stdout file descriptor */
+    struct winsize ws;  /* rows and columns in terminal */
+    char *buf;          /* edited line buffer */
+    const char *prompt; /* prompt to display */
     int hindex;         /* history index */
-    unsigned buflen;    /* Edited line buffer size */
-    unsigned pos;       /* Current cursor position */
-    unsigned oldpos;    /* Previous refresh cursor position */
-    unsigned len;       /* Current edited line length */
-    unsigned maxrows;   /* Maximum num of rows used so far */
-    unsigned mark;      /* Saved cursor position */
-    unsigned yi, yj;    /* Boundaries of last yank */
-    char seq[2][16];    /* Keystroke history for yanking code */
+    int rows;           /* rows being used */
+    int oldpos;         /* previous refresh cursor position */
+    unsigned buflen;    /* edited line buffer size */
+    unsigned pos;       /* current buffer index */
+    unsigned len;       /* current edited line length */
+    unsigned mark;      /* saved cursor position */
+    unsigned yi, yj;    /* boundaries of last yank */
+    char seq[2][16];    /* keystroke history for yanking code */
+    char dirty;         /* if an update was squashed */
 };
 
 static const char *const kUnsupported[] = {"dumb","cons25","emacs"};
@@ -1763,13 +1764,13 @@ static struct winsize GetTerminalSize(struct winsize ws, int ifd, int ofd) {
     ssize_t n;
     char *p, *s, b[16];
     ioctl(ofd, TIOCGWINSZ, &ws);
-    if ((!ws.ws_row && 
-         (s = getenv("ROWS")) && 
+    if ((!ws.ws_row &&
+         (s = getenv("ROWS")) &&
          (x = ParseUnsigned(s, 0)))) {
         ws.ws_row = x;
     }
-    if ((!ws.ws_col && 
-         (s = getenv("COLUMNS")) && 
+    if ((!ws.ws_col &&
+         (s = getenv("COLUMNS")) &&
          (x = ParseUnsigned(s, 0)))) {
         ws.ws_col = x;
     }
@@ -2077,43 +2078,47 @@ static void bestlineRefreshLineImpl(struct bestlineState *l, int force) {
     char *hint;
     struct abuf ab;
     struct rune rune;
-    int t, x, y, xn, yn;
     const char *p, *buf;
-    int i, j, fd, plen, width, pwidth, rows, len, pos, rpos, rpos2, col, old_rows;
+    struct winsize oldsize;
+    int t, x, y, xn, yn, cx, cy, resized;
+    int i, j, fd, plen, width, pwidth, rows, len, pos;
     if (!force && poll((struct pollfd[]){{l->ifd, POLLIN}}, 1, 0) == 1) {
+        l->dirty = 1;
         return; /* avoid refresh if there's pending input */
     }
-    if (gotwinch && rawmode != -1) {
-        l->ws = GetTerminalSize(l->ws, l->ifd, l->ofd);
+    oldsize = l->ws;
+    if ((resized = gotwinch) && rawmode != -1) {
         gotwinch = 0;
+        l->ws = GetTerminalSize(l->ws, l->ifd, l->ofd);
     }
+
+StartOver:
     fd = l->ofd;
     buf = l->buf;
     pos = l->pos;
     len = l->len;
     xn = l->ws.ws_col;
     yn = l->ws.ws_row;
-    old_rows = l->maxrows;
     plen = strlen(l->prompt);
     pwidth = GetMonospaceWidth(l->prompt, plen);
     width = GetMonospaceWidth(buf, len);
 
     /*
      * handle the case where the line is larger than the whole display
-     * todo: fix this so it doesn't bias l.pos to the middle each time
+     * gnu readline actually isn't able to deal with this situation!!!
      */
     for (;;) {
-        if (pwidth + width < xn * yn) break; /* we're fine */
-        if (!len || width < 2) break;        /* we can't do anything */
-        if (pwidth + 2 > xn * yn) break;     /* we can't do anything */
+        if (pwidth + width + 1 < (xn-1) * yn) break; /* we're fine */
+        if (!len || width < 2) break;                /* we can't do anything */
+        if (pwidth + 2 > (xn-1) * yn) break;         /* we can't do anything */
         if (pos > len / 2) {
-            /* hide content on the left */
+            /* hide content on the left if we're editing on the right */
             rune = GetUtf8(buf, len);
             buf += rune.n;
             len -= rune.n;
             pos -= rune.n;
         } else {
-            /* hide content on the right */
+            /* hide content on the right if we're editing on left */
             t = len;
             while (len && (buf[len - 1] & 0300) == 0200) --len;
             if (len) --len;
@@ -2125,9 +2130,6 @@ static void bestlineRefreshLineImpl(struct bestlineState *l, int force) {
     }
 
     pos = Max(0, Min(pos, len));
-    rpos = (pwidth + l->oldpos + xn) / xn; /* cursor relative row */
-    rows = (pwidth + width + xn - 1) / xn; /* rows used by current buf */
-    if (rows > (int)l->maxrows) l->maxrows = rows;
 
     /*
      * now generate the terminal codes to update the line
@@ -2143,27 +2145,38 @@ static void bestlineRefreshLineImpl(struct bestlineState *l, int force) {
      *
      * we make the assumption that prompts and hints may contain ansi
      * sequences, but the buffer does not.
+     *
+     * we need to handle the edge case where a wide character like 度
+     * might be at the edge of the window, when there's one cell left.
+     * so we can't use division based on string width to compute the
+     * coordinates and have to track it as we go.
      */
+    cy = -1;
+    cx = -1;
+    rows = 1;
     abInit(&ab);
-    abAppends(&ab, "\r");
-    if (old_rows - rpos > 0) {
-        abAppendw(&ab, Read32le("\033[\0"));
-        abAppendu(&ab, old_rows - rpos);
-        abAppendw(&ab, 'B'); /* cursor down */
-    }
-    for (j = 0; j < old_rows - 1; j++) {
-        abAppendw(&ab, Read32le("\r\033[A")); /* cursor up */
+    abAppendw(&ab, '\r');
+    if (l->rows - l->oldpos - 1 > 0) {
+        abAppends(&ab, "\033[");
+        abAppendu(&ab, l->rows - l->oldpos - 1);
+        abAppendw(&ab, 'A'); /* cursor up */
     }
     abAppends(&ab, l->prompt);
     x = pwidth;
     for (i = 0; i < len; i += rune.n) {
-        if (x >= xn) {
+        rune = GetUtf8(buf + i, len - i);
+        if (x && x + rune.n > xn) {
             x = 0;
+            ++rows;
+            if (cy >= 0) ++cy;
             abAppends(&ab, "\033[K"  /* clear forward */
                            "\r"      /* start */
                            "\033E"); /* next line */
         }
-        rune = GetUtf8(buf + i, len - i);
+        if (i == pos) {
+            cy = 0;
+            cx = x;
+        }
         if (maskmode) {
             abAppendw(&ab, '*');
         } else {
@@ -2175,6 +2188,9 @@ static void bestlineRefreshLineImpl(struct bestlineState *l, int force) {
     }
     if ((hint = bestlineRefreshHints(l))) {
         if (GetMonospaceWidth(hint, strlen(hint)) < xn - x) {
+            if (cx < 0) {
+                cx = x;
+            }
             abAppends(&ab, hint);
         }
         free(hint);
@@ -2187,29 +2203,36 @@ static void bestlineRefreshLineImpl(struct bestlineState *l, int force) {
      */
     if (pos && pos == len && x >= xn) {
         abAppendw(&ab, Read32le("\n\r\0"));
-        if (++rows > (int)l->maxrows) {
-            l->maxrows = rows;
-        }
+        ++rows;
     }
 
     /*
      * move cursor to right position
      */
-    rpos2 = (pwidth + GetMonospaceWidth(buf, pos) + xn) / xn;
-    if (rows - rpos2 > 0) {
-        abAppendw(&ab, Read32le("\033[\0"));
-        abAppendu(&ab, rows - rpos2);
+    if (cy > 0) {
+        abAppends(&ab, "\033[");
+        abAppendu(&ab, cy);
         abAppendw(&ab, 'A'); /* cursor up */
     }
-    col = (pwidth + (int)GetMonospaceWidth(buf, pos)) % (int)xn;
-    if (col) {
+    if (cx > 0) {
         abAppendw(&ab, Read32le("\r\033["));
-        abAppendu(&ab, col);
+        abAppendu(&ab, cx);
         abAppendw(&ab, 'C'); /* cursor right */
-    } else {
+    } else if (!cx) {
         abAppendw(&ab, '\r'); /* start */
     }
-    l->oldpos = pos;
+
+    /*
+     * now get ready to progress state
+     * we use a mostly correct kludge when the tty resizes
+     */
+    l->rows = rows;
+    if (resized && oldsize.ws_col > l->ws.ws_col) {
+        resized = 0;
+        goto StartOver;
+    }
+    l->dirty = 0;
+    l->oldpos = Max(0, cy);
 
     /*
      * send codes to terminal
@@ -2576,6 +2599,7 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
     bestlineHistoryAdd("");
     bestlineWriteStr(l.ofd,l.prompt);
     while (1) {
+        if (l.dirty) bestlineRefreshLineForce(&l);
         rc = bestlineRead(l.ifd,seq,sizeof(seq),&l);
         if (rc > 0) {
             if (seq[0] == Ctrl('R')) {

@@ -3,6 +3,8 @@
 Library for interactive pseudoteletypewriter command
 sessions using ANSI Standard X3.64 control sequences
 
+![Bestline Demo Video GIF](bestline.gif)
+
 ## Overview
 
 This is a single-file no-dependencies C or C++ library that makes it as
