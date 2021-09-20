@@ -29,6 +29,7 @@
 │                                                                              │
 │   - Remove bell                                                              │
 │   - Add kill ring                                                            │
+│   - Fix flickering                                                           │
 │   - Add UTF-8 editing                                                        │
 │   - Add CTRL-R search                                                        │
 │   - React to terminal resizing                                               │
@@ -36,6 +37,7 @@
 │   - Support terminal flow control                                            │
 │   - Make history loading 10x faster                                          │
 │   - Make multiline mode the only mode                                        │
+│   - Support unlimited input line length                                      │
 │   - Accommodate O_NONBLOCK file descriptors                                  │
 │   - Restore raw mode on process foregrounding                                │
 │   - Make source code compatible with C++ compilers                           │
@@ -149,7 +151,6 @@ Copyright 2010-2013 Pieter Noordhuis <pcnoordhuis@gmail.com>\"");
 
 #define BESTLINE_MAX_RING    8
 #define BESTLINE_MAX_HISTORY 1024
-#define BESTLINE_MAX_LINE    4096
 
 #define BESTLINE_HISTORY_FIRST +BESTLINE_MAX_HISTORY
 #define BESTLINE_HISTORY_PREV  +1
@@ -1094,6 +1095,17 @@ static unsigned long long EncodeUtf8(unsigned c) {
     return c | w | e >> 8;
 }
 
+static struct rune GetUtf8(const char *p, size_t n) {
+    struct rune r;
+    if ((r.n = r.c = 0) < n && (r.c = p[r.n++] & 255) >= 0300) {
+        r.c = DecodeUtf8(r.c).c;
+        while (r.n < n && (p[r.n] & 0300) == 0200) {
+            r.c = r.c << 6 | (p[r.n++] & 077);
+        }
+    }
+    return r;
+}
+
 static size_t GetFdSize(int fd) {
     struct stat st;
     st.st_size = 0;
@@ -1123,16 +1135,6 @@ static char *GetLine(FILE *f) {
 static char *Copy(char *d, const char *s, size_t n) {
     memcpy(d, s, n);
     return d + n;
-}
-
-static char *CopyUntil(char *d, const char *s, int c, size_t n) {
-    size_t i;
-    for (i = 0; i < n; ++i) {
-        if ((d[i] = s[i]) == c) {
-            return d + i + 1;
-        }
-    }
-    return 0;
 }
 
 static int CompareStrings(const char *a, const char *b) {
@@ -1809,15 +1811,32 @@ void bestlineFreeCompletions(bestlineCompletions *lc) {
         free(lc->cvec);
 }
 
+static int bestlineGrow(struct bestlineState *ls, size_t n) {
+    char *p;
+    size_t m;
+    m = ls->buflen;
+    if (m >= n) return 1;
+    do {
+        m += m >> 1;
+    } while (m < n);
+    if ((p = realloc(ls->buf, m * sizeof(*ls->buf)))) {
+        ls->buf = p;
+        ls->buflen = m;
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
 /* This is an helper function for bestlineEdit() and is called when the
  * user types the <tab> key in order to complete the string currently in the
  * input.
  *
  * The state of the editing is encapsulated into the pointed bestlineState
  * structure as described in the structure definition. */
-static int bestlineCompleteLine(struct bestlineState *ls, char *seq, int size) {
+static ssize_t bestlineCompleteLine(struct bestlineState *ls, char *seq, int size) {
+    ssize_t nread;
     size_t i, n, stop;
-    int nwritten, nread;
     bestlineCompletions lc;
     struct bestlineState saved;
     nread=0;
@@ -1841,8 +1860,7 @@ static int bestlineCompleteLine(struct bestlineState *ls, char *seq, int size) {
             } else {
                 bestlineRefreshLine(ls);
             }
-            nread = bestlineRead(ls->ifd,seq,size,ls);
-            if (nread <= 0) {
+            if ((nread = bestlineRead(ls->ifd,seq,size,ls)) <= 0) {
                 bestlineFreeCompletions(&lc);
                 return -1;
             }
@@ -1856,9 +1874,10 @@ static int bestlineCompleteLine(struct bestlineState *ls, char *seq, int size) {
             default:
                 if (i < lc.len) {
                     n = strlen(lc.cvec[i]);
-                    nwritten = Min(n,ls->buflen);
-                    memcpy(ls->buf,lc.cvec[i],nwritten+1);
-                    ls->len = ls->pos = nwritten;
+                    if (bestlineGrow(ls, n + 1)) {
+                        memcpy(ls->buf, lc.cvec[i], n + 1);
+                        ls->len = ls->pos = n;
+                    }
                 }
                 stop = 1;
                 break;
@@ -1870,15 +1889,18 @@ static int bestlineCompleteLine(struct bestlineState *ls, char *seq, int size) {
 }
 
 static void bestlineEditHistoryGoto(struct bestlineState *l, int i) {
+    size_t n;
     if (historylen <= 1) return;
     i = Max(Min(i,historylen-1),0);
     free(history[historylen - 1 - l->hindex]);
     history[historylen - 1 - l->hindex] = strdup(l->buf);
     l->hindex = i;
-    if(!CopyUntil(l->buf,history[historylen-1-l->hindex],0,l->buflen)){
-        l->buf[l->buflen-1] = 0;
-    }
-    l->len = l->pos = strlen(l->buf);
+    n = strlen(history[historylen - 1 - l->hindex]);
+    bestlineGrow(l, n + 1);
+    n = Min(n, l->buflen - 1);
+    memcpy(l->buf, history[historylen - 1 - l->hindex], n);
+    l->buf[n] = 0;
+    l->len = l->pos = n;
     bestlineRefreshLine(l);
 }
 
@@ -1948,7 +1970,7 @@ static int bestlineSearch(struct bestlineState *l, char *seq, int size) {
         while (i < historylen) {
             p = history[historylen - 1 - i];
             k = strlen(p);
-            j = Min(k, j + ab.len);
+            j = j >= 0 ? Min(k, j + ab.len) : k;
             if ((q = FindSubstringReverse(p, j, ab.b, ab.len))) {
                 bestlineEditHistoryGoto(l,i);
                 l->pos = q - p;
@@ -1960,7 +1982,7 @@ static int bestlineSearch(struct bestlineState *l, char *seq, int size) {
                 break;
             } else {
                 i = i + 1;
-                j = BESTLINE_MAX_LINE;
+                j = -1;
             }
         }
     }
@@ -2035,102 +2057,185 @@ static void bestlineRingRotate(void) {
     }
 }
 
-static void bestlineRefreshHints(struct abuf *ab, struct bestlineState *l) {
+static char *bestlineRefreshHints(struct bestlineState *l) {
     char *hint;
+    struct abuf ab;
     const char *ansi1, *ansi2;
-    if (!hintsCallback) return;
+    if (!hintsCallback) return 0;
+    if (!(hint = hintsCallback(l->buf, &ansi1, &ansi2))) return 0;
+    abInit(&ab);
     ansi1 = "\033[90m";
     ansi2 = "\033[39m";
-    if (!(hint = hintsCallback(l->buf,&ansi1,&ansi2))) return;
-    if (ansi1) abAppends(ab,ansi1);
-    abAppends(ab,hint);
-    if (ansi2) abAppends(ab,ansi2);
+    if (ansi1) abAppends(&ab, ansi1);
+    abAppends(&ab, hint);
+    if (ansi2) abAppends(&ab, ansi2);
     if (freeHintsCallback) freeHintsCallback(hint);
+    return ab.b;
 }
 
-static void bestlineRefreshLine(struct bestlineState *l) {
+static void bestlineRefreshLineImpl(struct bestlineState *l, int force) {
+    char *hint;
     struct abuf ab;
-    int i, j, fd, plen, pwidth, rows, rpos, rpos2, col, old_rows;
+    struct rune rune;
+    int t, x, y, xn, yn;
+    const char *p, *buf;
+    int i, j, fd, plen, width, pwidth, rows, len, pos, rpos, rpos2, col, old_rows;
+    if (!force && poll((struct pollfd[]){{l->ifd, POLLIN}}, 1, 0) == 1) {
+        return; /* avoid refresh if there's pending input */
+    }
     if (gotwinch && rawmode != -1) {
-        l->ws = GetTerminalSize(l->ws,l->ifd,l->ofd);
+        l->ws = GetTerminalSize(l->ws, l->ifd, l->ofd);
         gotwinch = 0;
     }
     fd = l->ofd;
+    buf = l->buf;
+    pos = l->pos;
+    len = l->len;
+    xn = l->ws.ws_col;
+    yn = l->ws.ws_row;
     old_rows = l->maxrows;
     plen = strlen(l->prompt);
-    pwidth = GetMonospaceWidth(l->prompt,plen);
-    /* cursor relative row */
-    rpos = (pwidth+l->oldpos+l->ws.ws_col)/l->ws.ws_col;
-    /* rows used by current buf */
-    rows = (pwidth+GetMonospaceWidth(l->buf,l->len)+
-            l->ws.ws_col-1)/l->ws.ws_col;
-    if (rows > (int)l->maxrows) l->maxrows = rows;
-    /* First step: clear all the lines used before.
-     * To do so start by going to the last row. */
-    abInit(&ab);
-    if (old_rows-rpos > 0) {
-        abAppendw(&ab,Read32le("\033[\0"));
-        abAppendu(&ab,old_rows-rpos);
-        abAppendw(&ab,'B');
-    }
-    /* Now for every row clear it, go up. */
-    for (j = 0; j < old_rows-1; j++) {
-        abAppends(&ab,"\r\033[K\033[A");
-    }
-    abAppendw(&ab,Read32le("\r\033[K"));
-    abAppends(&ab,l->prompt);
-    if (maskmode) {
-        for (i = 0; i < l->len; i++) {
-            abAppendw(&ab,'*');
+    pwidth = GetMonospaceWidth(l->prompt, plen);
+    width = GetMonospaceWidth(buf, len);
+
+    /*
+     * handle the case where the line is larger than the whole display
+     * todo: fix this so it doesn't bias l.pos to the middle each time
+     */
+    for (;;) {
+        if (pwidth + width < xn * yn) break; /* we're fine */
+        if (!len || width < 2) break;        /* we can't do anything */
+        if (pwidth + 2 > xn * yn) break;     /* we can't do anything */
+        if (pos > len / 2) {
+            /* hide content on the left */
+            rune = GetUtf8(buf, len);
+            buf += rune.n;
+            len -= rune.n;
+            pos -= rune.n;
+        } else {
+            /* hide content on the right */
+            t = len;
+            while (len && (buf[len - 1] & 0300) == 0200) --len;
+            if (len) --len;
+            rune = GetUtf8(buf + len, t - len);
         }
-    } else {
-        abAppend(&ab,l->buf,l->len);
+        if ((t = GetMonospaceCharacterWidth(rune.c)) > 0) {
+            width -= t;
+        }
     }
-    bestlineRefreshHints(&ab,l);
-    /* If we are at the very end of the screen with our prompt, we need to
-     * emit a newline and move the prompt to the first column. */
-    if ((l->pos && l->pos == l->len &&
-         !((pwidth + GetMonospaceWidth(l->buf,l->pos)) % l->ws.ws_col))) {
-        abAppendw(&ab,Read32le("\n\r\0"));
+
+    pos = Max(0, Min(pos, len));
+    rpos = (pwidth + l->oldpos + xn) / xn; /* cursor relative row */
+    rows = (pwidth + width + xn - 1) / xn; /* rows used by current buf */
+    if (rows > (int)l->maxrows) l->maxrows = rows;
+
+    /*
+     * now generate the terminal codes to update the line
+     *
+     * we insert our own special ansi codes for \r\n manually because a
+     * terminal driver might have a different understanding of character
+     * width than we do, and we'll want to recover as best as possible.
+     *
+     * since we support unlimited lines it's important that we don't clear
+     * the screen before we draw the screen. doing that causes flickering.
+     * the key with terminals is to overwrite cells and use \e[K (and
+     * possibly also \e[0m) to clear whatever remains on a given line.
+     *
+     * we make the assumption that prompts and hints may contain ansi
+     * sequences, but the buffer does not.
+     */
+    abInit(&ab);
+    abAppends(&ab, "\r");
+    if (old_rows - rpos > 0) {
+        abAppendw(&ab, Read32le("\033[\0"));
+        abAppendu(&ab, old_rows - rpos);
+        abAppendw(&ab, 'B'); /* cursor down */
+    }
+    for (j = 0; j < old_rows - 1; j++) {
+        abAppendw(&ab, Read32le("\r\033[A")); /* cursor up */
+    }
+    abAppends(&ab, l->prompt);
+    x = pwidth;
+    for (i = 0; i < len; i += rune.n) {
+        if (x >= xn) {
+            x = 0;
+            abAppends(&ab, "\033[K"  /* clear forward */
+                           "\r"      /* start */
+                           "\033E"); /* next line */
+        }
+        rune = GetUtf8(buf + i, len - i);
+        if (maskmode) {
+            abAppendw(&ab, '*');
+        } else {
+            abAppendw(&ab, EncodeUtf8(rune.c));
+        }
+        t = GetMonospaceCharacterWidth(rune.c);
+        t = Max(0, t);
+        x += t;
+    }
+    if ((hint = bestlineRefreshHints(l))) {
+        if (GetMonospaceWidth(hint, strlen(hint)) < xn - x) {
+            abAppends(&ab, hint);
+        }
+        free(hint);
+    }
+    abAppendw(&ab, Read32le("\033[J")); /* erase display forwards */
+
+    /*
+     * If we are at the very end of the screen with our prompt, we need to
+     * emit a newline and move the prompt to the first column.
+     */
+    if (pos && pos == len && x >= xn) {
+        abAppendw(&ab, Read32le("\n\r\0"));
         if (++rows > (int)l->maxrows) {
             l->maxrows = rows;
         }
     }
-    /* Move cursor to right position. */
-    /* Get current cursor relative row. */
-    rpos2 = (pwidth+GetMonospaceWidth(l->buf,l->pos)+
-             l->ws.ws_col)/l->ws.ws_col;
-    /* Go up till we reach the expected positon. */
-    if (rows-rpos2 > 0) {
-        abAppendw(&ab,Read32le("\033[\0"));
-        abAppendu(&ab,rows-rpos2);
-        abAppendw(&ab,'A');
+
+    /*
+     * move cursor to right position
+     */
+    rpos2 = (pwidth + GetMonospaceWidth(buf, pos) + xn) / xn;
+    if (rows - rpos2 > 0) {
+        abAppendw(&ab, Read32le("\033[\0"));
+        abAppendu(&ab, rows - rpos2);
+        abAppendw(&ab, 'A'); /* cursor up */
     }
-    /* Set column. */
-    col = (pwidth+(int)GetMonospaceWidth(l->buf,l->pos)) % (int)l->ws.ws_col;
+    col = (pwidth + (int)GetMonospaceWidth(buf, pos)) % (int)xn;
     if (col) {
-        abAppendw(&ab,Read32le("\r\033["));
-        abAppendu(&ab,col);
-        abAppendw(&ab,'C');
+        abAppendw(&ab, Read32le("\r\033["));
+        abAppendu(&ab, col);
+        abAppendw(&ab, 'C'); /* cursor right */
     } else {
-        abAppendw(&ab,'\r');
+        abAppendw(&ab, '\r'); /* start */
     }
-    l->oldpos = l->pos;
-    bestlineWrite(fd,ab.b,ab.len);
+    l->oldpos = pos;
+
+    /*
+     * send codes to terminal
+     */
+    bestlineWrite(fd, ab.b, ab.len);
     abFree(&ab);
 }
 
-static int bestlineEditInsert(struct bestlineState *l,
+static void bestlineRefreshLine(struct bestlineState *l) {
+    bestlineRefreshLineImpl(l, 0);
+}
+
+static void bestlineRefreshLineForce(struct bestlineState *l) {
+    bestlineRefreshLineImpl(l, 1);
+}
+
+static void bestlineEditInsert(struct bestlineState *l,
                                const char *p, size_t n) {
-    if (l->len + n < l->buflen) {
-        memmove(l->buf+l->pos+n,l->buf+l->pos,l->len-l->pos);
+    if (bestlineGrow(l, l->len + n + 1)) {
+        memmove(l->buf + l->pos + n, l->buf + l->pos, l->len - l->pos);
         memcpy(l->buf + l->pos, p, n);
         l->pos += n;
         l->len += n;
         l->buf[l->len] = 0;
         bestlineRefreshLine(l);
     }
-    return 0;
 }
 
 static void bestlineEditHome(struct bestlineState *l) {
@@ -2162,17 +2267,6 @@ static void bestlineEditEof(struct bestlineState *l) {
 static void bestlineEditRefresh(struct bestlineState *l) {
     bestlineClearScreen(l->ofd);
     bestlineRefreshLine(l);
-}
-
-static struct rune GetUtf8(const char *p, size_t n) {
-    struct rune r;
-    if ((r.n = r.c = 0) < n && (r.c = p[r.n++] & 255) >= 0300) {
-        r.c = DecodeUtf8(r.c).c;
-        while (r.n < n && (p[r.n] & 0300) == 0200) {
-            r.c = r.c << 6 | (p[r.n++] & 077);
-        }
-    }
-    return r;
 }
 
 static size_t Forward(struct bestlineState *l, size_t pos) {
@@ -2290,7 +2384,7 @@ static void bestlineEditDeleteWord(struct bestlineState *l) {
     size_t i;
     if (l->pos == l->len) return;
     i = ForwardWord(l, l->pos);
-    bestlineRingPush(l->buf + l->pos, i - l->len);
+    bestlineRingPush(l->buf + l->pos, i - l->pos);
     memmove(l->buf + l->pos, l->buf + i, l->len - i + 1);
     l->len -= i - l->pos;
     bestlineRefreshLine(l);
@@ -2323,7 +2417,7 @@ static void bestlineEditXlatWord(struct bestlineState *l, int xlat(int)) {
             abAppend(&ab, l->buf + j, r.n);
         }
     }
-    if (ab.len && i + ab.len + l->len - j < l->buflen) {
+    if (ab.len && bestlineGrow(l, i + ab.len + l->len - j + 1)) {
         l->pos = i + ab.len;
         abAppend(&ab, l->buf + j, l->len - j);
         l->len = i + ab.len;
@@ -2369,18 +2463,17 @@ static void bestlineEditYank(struct bestlineState *l) {
     size_t n;
     if (!ring.p[ring.i]) return;
     n = strlen(ring.p[ring.i]);
-    if (l->len + n < l->buflen) {
-        p = (char *)malloc(l->len - l->pos + 1);
-        memcpy(p, l->buf + l->pos, l->len - l->pos + 1);
-        memcpy(l->buf + l->pos, ring.p[ring.i], n);
-        memcpy(l->buf + l->pos + n, p, l->len - l->pos + 1);
-        l->yi = l->pos;
-        l->yj = l->pos + n;
-        l->pos += n;
-        l->len += n;
-        free(p);
-        bestlineRefreshLine(l);
-    }
+    bestlineGrow(l, l->len + n + 1);
+    p = malloc(l->len - l->pos + 1);
+    memcpy(p, l->buf + l->pos, l->len - l->pos + 1);
+    memcpy(l->buf + l->pos, ring.p[ring.i], n);
+    memcpy(l->buf + l->pos + n, p, l->len - l->pos + 1);
+    free(p);
+    l->yi = l->pos;
+    l->yj = l->pos + n;
+    l->pos += n;
+    l->len += n;
+    bestlineRefreshLine(l);
 }
 
 static void bestlineEditRotate(struct bestlineState *l) {
@@ -2466,20 +2559,18 @@ static void bestlineEditGoto(struct bestlineState *l) {
  *
  * Returns chomped character count in buf >=0 or -1 on eof / error
  */
-static ssize_t bestlineEdit(int stdin_fd, int stdout_fd,
-                             char *buf, size_t buflen,
-                             const char *prompt) {
+static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
+                            char **obuf) {
     ssize_t rc;
     size_t nread;
-    char seq[16];
+    char *p, seq[16];
     struct bestlineState l;
     bestlineHintsCallback *hc;
     memset(&l,0,sizeof(l));
-    buf[0] = 0;
-    l.buf = buf;
+    if (!(l.buf = malloc((l.buflen = 32)))) return -1;
+    l.buf[0] = 0;
     l.ifd = stdin_fd;
     l.ofd = stdout_fd;
-    l.buflen = buflen - 1;
     l.prompt = prompt ? prompt : "";
     l.ws = GetTerminalSize(l.ws,l.ifd,l.ofd);
     bestlineHistoryAdd("");
@@ -2505,6 +2596,7 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd,
             historylen--;
             free(history[historylen]);
             history[historylen] = 0;
+            free(l.buf);
             return -1;
         }
         switch (seq[0]) {
@@ -2534,6 +2626,7 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd,
             } else {
                 free(history[--historylen]);
                 history[historylen] = 0;
+                free(l.buf);
                 return -1;
             }
             break;
@@ -2541,14 +2634,12 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd,
             free(history[--historylen]);
             history[historylen] = 0;
             bestlineEditEnd(&l);
-            if (hintsCallback) {
-                /* Force a refresh without hints to leave the previous
-                 * line as the user typed it after a newline. */
-                hc = hintsCallback;
-                hintsCallback = 0;
-                bestlineRefreshLine(&l);
-                hintsCallback = hc;
-            }
+            hc = hintsCallback;
+            hintsCallback = 0;
+            bestlineRefreshLineForce(&l);
+            hintsCallback = hc;
+            if ((p = realloc(l.buf, l.len + 1))) l.buf = p;
+            *obuf = l.buf;
             return l.len;
         case 033:
             if (nread < 2) break;
@@ -2744,7 +2835,6 @@ char *bestlineRaw(const char *prompt, int infd, int outfd) {
     static char once;
     struct sigaction sa;
     if (!once) atexit(bestlineAtExit), once = 1;
-    if (!(buf = (char *)malloc(BESTLINE_MAX_LINE))) return 0;
     if (enableRawMode(infd) == -1) return 0;
     sigemptyset(&sa.sa_mask);
     sigaddset(&sa.sa_mask,SIGINT);
@@ -2757,7 +2847,7 @@ char *bestlineRaw(const char *prompt, int infd, int outfd) {
     sigaction(SIGQUIT,&sa,&orig_quit);
     if (!(sig = setjmp(jraw))) {
         sigprocmask(SIG_UNBLOCK,&sa.sa_mask,0);
-        rc = bestlineEdit(infd,outfd,buf,BESTLINE_MAX_LINE,prompt);
+        rc = bestlineEdit(infd,outfd,prompt,&buf);
     } else {
         rc = -1;
     }
@@ -2769,13 +2859,8 @@ char *bestlineRaw(const char *prompt, int infd, int outfd) {
     if (rc != -1) {
         nread = rc;
         bestlineWriteStr(outfd,"\n");
-        if ((p = (char *)realloc(buf,nread+1))) {
-            return p;
-        } else {
-            return buf;
-        }
+        return buf;
     } else {
-        free(buf);
         return 0;
     }
 }
@@ -2795,6 +2880,12 @@ char *bestlineRaw(const char *prompt, int infd, int outfd) {
  * @return chomped allocated string of read line or null on eof/error
  */
 char *bestline(const char *prompt) {
+    if (prompt && *prompt &&
+        (strchr(prompt, '\n') || strchr(prompt, '\t') ||
+         strchr(prompt + 1, '\r'))) {
+        errno = EINVAL;
+        return 0;
+    }
     if ((!isatty(fileno(stdin)) ||
          !isatty(fileno(stdout)))) {
         return GetLine(stdin);
