@@ -123,7 +123,6 @@
 #define _POSIX_C_SOURCE  1 /* so GCC builds in ANSI mode */
 #define _XOPEN_SOURCE  700 /* so GCC builds in ANSI mode */
 #define _DARWIN_C_SOURCE 1 /* for SIGWINCH and IUTF8 on XNU */
-#define _DARWIN_C_SOURCE 1 /* for SIGWINCH on XNU */
 #include <termios.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -136,7 +135,6 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <sys/signal.h>
 #include <unistd.h>
 #include <setjmp.h>
 #include <poll.h>
@@ -144,6 +142,12 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <limits.h>
+#ifndef SIGWINCH
+#define SIGWINCH 28 /* GNU/Systemd + XNU + FreeBSD + NetBSD + OpenBSD */
+#endif
+#ifndef IUTF8
+#define IUTF8 0
+#endif
 #endif
 
 __asm__(".ident\t\"\\n\\n\
@@ -152,8 +156,13 @@ Copyright 2018-2020 Justine Tunney <jtunney@gmail.com>\\n\
 Copyright 2010-2016 Salvatore Sanfilippo <antirez@gmail.com>\\n\
 Copyright 2010-2013 Pieter Noordhuis <pcnoordhuis@gmail.com>\"");
 
-#define BESTLINE_MAX_RING    8
+#ifndef BESTLINE_MAX_RING
+#define BESTLINE_MAX_RING 8
+#endif
+
+#ifndef BESTLINE_MAX_HISTORY
 #define BESTLINE_MAX_HISTORY 1024
+#endif
 
 #define BESTLINE_HISTORY_FIRST +BESTLINE_MAX_HISTORY
 #define BESTLINE_HISTORY_PREV  +1
@@ -172,7 +181,8 @@ Copyright 2010-2013 Pieter Noordhuis <pcnoordhuis@gmail.com>\"");
 
 struct abuf {
     char *b;
-    int len;
+    unsigned len;
+    unsigned cap;
 };
 
 struct rune {
@@ -208,16 +218,14 @@ struct bestlineState {
 
 static const char *const kUnsupported[] = {"dumb","cons25","emacs"};
 
-static jmp_buf jraw;
+static int gotint;
+static int gotcont;
+static int gotwinch;
 static char rawmode;
-static char gotcont;
-static char gotwinch;
 static char maskmode;
 static char iscapital;
-static int historylen;
+static unsigned historylen;
 static struct bestlineRing ring;
-static struct sigaction orig_int;
-static struct sigaction orig_quit;
 static struct sigaction orig_cont;
 static struct sigaction orig_winch;
 static struct termios orig_termios;
@@ -229,12 +237,11 @@ static bestlineCompletionCallback *completionCallback;
 static void bestlineAtExit(void);
 static void bestlineRefreshLine(struct bestlineState *);
 
-static int IsControl(int c) {
-    return ((0x00 <= c && c <= 0x1F) ||
-            (0x7F <= c && c <= 0x9F));
+static char IsControl(unsigned c) {
+    return c <= 0x1F || (0x7F <= c && c <= 0x9F);
 }
 
-static int GetMonospaceCharacterWidth(int c) {
+static int GetMonospaceCharacterWidth(unsigned c) {
     return !IsControl(c)
             + (c >= 0x1100 &&
                (c <= 0x115f || c == 0x2329 || c == 0x232a ||
@@ -257,7 +264,7 @@ static int GetMonospaceCharacterWidth(int c) {
  * and aren't in the number categorie (Nd, Nl, No). We also add a few
  * other things like blocks and emoji (So).
  */
-static int IsSeparator(int c) {
+static char IsSeparator(unsigned c) {
     int m, l, r;
     if (c < 0200) {
         return !(('0' <= c && c <= '9') ||
@@ -652,7 +659,7 @@ static int IsSeparator(int c) {
     }
 }
 
-static int Lowercase(int c) {
+static unsigned Lowercase(unsigned c) {
     int m, l, r;
     if (c < 0200) {
         if ('A' <= c && c <= 'Z') {
@@ -820,7 +827,11 @@ static int Lowercase(int c) {
             }
         }
     } else {
-        static const int kAstralLower[][3] = {
+        static struct {
+            unsigned a;
+            unsigned b;
+            short d;
+        } kAstralLower[] = {
             {0x10400, 0x10427,   +40}, /* 40x 𐐀 ..𐐧  → 𐐨 ..𐑏  Deseret */
             {0x104b0, 0x104d3,   +40}, /* 36x 𐒰 ..𐓓  → 𐓘 ..𐓻  Osage */
             {0x1d400, 0x1d419,   +26}, /* 26x 𝐀 ..𝐙  → 𝐚 ..𝐳  Math */
@@ -845,21 +856,21 @@ static int Lowercase(int c) {
         r = sizeof(kAstralLower) / sizeof(kAstralLower[0]);
         while (l < r) {
             m = (l + r) >> 1;
-            if (kAstralLower[m][1] < c) {
+            if (kAstralLower[m].b < c) {
                 l = m + 1;
             } else {
                 r = m;
             }
         }
-        if (kAstralLower[l][0] <= c && c <= kAstralLower[l][1]) {
-            return c + kAstralLower[l][2];
+        if (kAstralLower[l].a <= c && c <= kAstralLower[l].b) {
+            return c + kAstralLower[l].d;
         } else {
             return c;
         }
     }
 }
 
-static int Uppercase(int c) {
+static unsigned Uppercase(unsigned c) {
     int m, l, r;
     if (c < 0200) {
         if ('a' <= c && c <= 'z') {
@@ -990,7 +1001,11 @@ static int Uppercase(int c) {
             }
         }
     } else {
-        static const int kAstralUpper[][3] = {
+        static const struct {
+            unsigned a;
+            unsigned b;
+            short d;
+        } kAstralUpper[] = {
             {0x10428, 0x1044f,   -40}, /* 40x 𐐨..𐑏 → 𐐀..𐐧 Deseret */
             {0x104d8, 0x104fb,   -40}, /* 36x 𐓘..𐓻 → 𐒰..𐓓 Osage */
             {0x1d41a, 0x1d433,   -26}, /* 26x 𝐚..𝐳 → 𝐀..𝐙 Math */
@@ -1015,25 +1030,25 @@ static int Uppercase(int c) {
         r = sizeof(kAstralUpper) / sizeof(kAstralUpper[0]);
         while (l < r) {
             m = (l + r) >> 1;
-            if (kAstralUpper[m][1] < c) {
+            if (kAstralUpper[m].b < c) {
                 l = m + 1;
             } else {
                 r = m;
             }
         }
-        if (kAstralUpper[l][0] <= c && c <= kAstralUpper[l][1]) {
-            return c + kAstralUpper[l][2];
+        if (kAstralUpper[l].a <= c && c <= kAstralUpper[l].b) {
+            return c + kAstralUpper[l].d;
         } else {
             return c;
         }
     }
 }
 
-static int NotSeparator(int c) {
+static char NotSeparator(unsigned c) {
     return !IsSeparator(c);
 }
 
-static int Capitalize(int c) {
+static unsigned Capitalize(unsigned c) {
     if (!iscapital) {
         c = Uppercase(c);
         iscapital = 1;
@@ -1210,8 +1225,16 @@ static int WaitUntilReady(int fd, int events) {
     return poll(p, 1, -1);
 }
 
+static char HasPendingInput(int fd) {
+    struct pollfd p[1];
+    p[0].fd = fd;
+    p[0].events = POLLIN;
+    return poll(p, 1, 0) == 1;
+}
+
 static ssize_t ReadCharacter(int fd, char *p, size_t n) {
-    int e, i;
+    int e;
+    size_t i;
     ssize_t rc;
     struct rune r;
     unsigned char c;
@@ -1224,6 +1247,10 @@ static ssize_t ReadCharacter(int fd, char *p, size_t n) {
     if (n) p[0] = 0;
     do {
         for (;;) {
+            if (gotint) {
+                errno = EINTR;
+                return -1;
+            }
             if (n) {
                 rc = read(fd,&c,1);
             } else {
@@ -1417,12 +1444,13 @@ static ssize_t ReadCharacter(int fd, char *p, size_t n) {
     return i;
 }
 
-static size_t GetMonospaceWidth(const char *p, size_t n) {
-    int c;
+static size_t GetMonospaceWidth(const char *p, size_t n, char *out_haswides) {
+    int c, d;
     size_t i, w;
     struct rune r;
+    char haswides;
     enum { kAscii, kUtf8, kEsc, kCsi1, kCsi2, kSs, kNf, kStr, kStr2 } t;
-    for (r.c = 0, r.n = 0, t = kAscii, w = i = 0; i < n; ++i) {
+    for (haswides = r.c = r.n = w = i = 0, t = kAscii; i < n; ++i) {
         c = p[i] & 255;
         switch (t) {
         Whoopsie:
@@ -1464,7 +1492,10 @@ static size_t GetMonospaceWidth(const char *p, size_t n) {
                         t = kStr;
                         break;
                     default:
-                        w += GetMonospaceCharacterWidth(r.c);
+                        d = GetMonospaceCharacterWidth(r.c);
+                        d = Max(0, d);
+                        w += d;
+                        haswides |= d > 1;
                         t = kAscii;
                         break;
                     }
@@ -1565,79 +1596,81 @@ static size_t GetMonospaceWidth(const char *p, size_t n) {
             assert(0);
         }
     }
+    if (out_haswides) {
+        *out_haswides = haswides;
+    }
     return w;
 }
 
-static void abInit(struct abuf *ab) {
-    ab->b = (char *)malloc(1);
-    ab->len = 0;
-    ab->b[0] = 0;
+static void abInit(struct abuf *a) {
+    a->len = 0;
+    a->cap = 16;
+    a->b = (char *)malloc(a->cap);
+    a->b[0] = 0;
 }
 
-static void abAppend(struct abuf *ab, const char *s, int len) {
+static char abGrow(struct abuf *a, int need) {
+    int cap;
+    char *b;
+    cap = a->cap;
+    do cap += cap / 2;
+    while (cap < need);
+    if (!(b = (char *)realloc(a->b, cap * sizeof(*a->b)))) return 0;
+    a->cap = cap;
+    a->b = b;
+    return 1;
+}
+
+static void abAppendw(struct abuf *a, unsigned long long w) {
     char *p;
-    if (!(p = (char *)realloc(ab->b,ab->len+len+1))) return;
-    memcpy(p+ab->len,s,len);
-    p[ab->len+len]=0;
-    ab->b = p;
-    ab->len += len;
+    if (a->len + 8 + 1 > a->cap && !abGrow(a, a->len + 8 + 1)) return;
+    p = a->b + a->len;
+    p[0] = (0x00000000000000FFull & w) >> 000;
+    p[1] = (0x000000000000FF00ull & w) >> 010;
+    p[2] = (0x0000000000FF0000ull & w) >> 020;
+    p[3] = (0x00000000FF000000ull & w) >> 030;
+    p[4] = (0x000000FF00000000ull & w) >> 040;
+    p[5] = (0x0000FF0000000000ull & w) >> 050;
+    p[6] = (0x00FF000000000000ull & w) >> 060;
+    p[7] = (0xFF00000000000000ull & w) >> 070;
+    a->len += w ? (Bsr(w) >> 3) + 1 : 1;
+    p[8] = 0;
 }
 
-static void abAppends(struct abuf *ab, const char *s) {
-    abAppend(ab, s, strlen(s));
+static void abAppend(struct abuf *a, const char *s, int len) {
+    if (a->len + len + 1 > a->cap && !abGrow(a, a->len + len + 1)) return;
+    memcpy(a->b + a->len, s, len);
+    a->b[a->len + len] = 0;
+    a->len += len;
 }
 
-static void abAppendu(struct abuf *ab, unsigned u) {
+static void abAppends(struct abuf *a, const char *s) {
+    abAppend(a, s, strlen(s));
+}
+
+static void abAppendu(struct abuf *a, unsigned u) {
     char b[11];
-    abAppend(ab, b, FormatUnsigned(b, u) - b);
+    abAppend(a, b, FormatUnsigned(b, u) - b);
 }
 
-static void abAppendw(struct abuf *ab, unsigned long long w) {
-    char b[8];
-    unsigned n = 0;
-    do b[n++] = w;
-    while ((w >>= 8));
-    abAppend(ab, b, n);
-}
-
-static void abFree(struct abuf *ab) {
-    free(ab->b);
-}
-
-/**
- * Enables "mask mode".
- *
- * When it is enabled, instead of the input that the user is typing, the
- * terminal will just display a corresponding number of asterisks, like
- * "****". This is useful for passwords and other secrets that should
- * not be displayed.
- */
-void bestlineMaskModeEnable(void) {
-    maskmode = 1;
-}
-
-void bestlineMaskModeDisable(void) {
-    maskmode = 0;
-}
-
-static void bestlineOnCont(int sig) {
-    gotcont = 1;
-}
-
-static void bestlineOnWinch(int sig) {
-    gotwinch = 1;
+static void abFree(struct abuf *a) {
+    free(a->b);
 }
 
 static void bestlineOnInt(int sig) {
-    longjmp(jraw, sig);
+    gotint = sig;
 }
 
-static void bestlineOnQuit(int sig) {
-    longjmp(jraw, sig);
+static void bestlineOnCont(int sig) {
+    gotcont = sig;
+}
+
+static void bestlineOnWinch(int sig) {
+    gotwinch = sig;
 }
 
 static int bestlineIsUnsupportedTerm(void) {
-    int i;
+    size_t i;
     char *term;
     static char once, res;
     if (!once) {
@@ -1662,9 +1695,7 @@ static int enableRawMode(int fd) {
         raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP);
         raw.c_lflag &= ~(ECHO | ICANON | IEXTEN);
         raw.c_oflag &= ~OPOST;
-#ifdef IUTF8
         raw.c_iflag |= IUTF8;
-#endif
         raw.c_cflag |= CS8;
         raw.c_cc[VMIN] = 1;
         raw.c_cc[VTIME] = 0;
@@ -1674,9 +1705,7 @@ static int enableRawMode(int fd) {
             sigemptyset(&sa.sa_mask);
             sigaction(SIGCONT,&sa,&orig_cont);
             sa.sa_handler = bestlineOnWinch;
-#ifdef SIGWINCH
             sigaction(SIGWINCH,&sa,&orig_winch);
-#endif
             rawmode = fd;
             gotwinch = 0;
             gotcont = 0;
@@ -1690,9 +1719,7 @@ static int enableRawMode(int fd) {
 void bestlineDisableRawMode(void) {
     if (rawmode != -1) {
         sigaction(SIGCONT,&orig_cont,0);
-#ifdef SIGWINCH
         sigaction(SIGWINCH,&orig_winch,0);
-#endif
         tcsetattr(rawmode,TCSAFLUSH,&orig_termios);
         rawmode = -1;
     }
@@ -1703,6 +1730,10 @@ static int bestlineWrite(int fd, const void *p, size_t n) {
     size_t wrote;
     do {
         for (;;) {
+            if (gotint) {
+                errno = EINTR;
+                return -1;
+            }
             rc = write(fd, p, n);
             if (rc == -1 && errno == EINTR) {
                 continue;
@@ -1734,23 +1765,33 @@ static int bestlineWriteStr(int fd, const char *p) {
 }
 
 static ssize_t bestlineRead(int fd, char *buf, size_t size,
-                             struct bestlineState *l) {
+                            struct bestlineState *l) {
+    size_t got;
     ssize_t rc;
     int refreshme;
     do {
         refreshme = 0;
+        if (gotint) {
+            errno = EINTR;
+            return -1;
+        }
         if (gotcont && rawmode != -1) {
             enableRawMode(rawmode);
             if (l) refreshme = 1;
         }
-        if (l && gotwinch) refreshme = 1;
+        if (gotwinch && l) {
+            refreshme = 1;
+        }
         if (refreshme) bestlineRefreshLine(l);
         rc = ReadCharacter(fd, buf, size);
     } while (rc == -1 && errno == EINTR);
-    if (l && rc > 0) {
-        memcpy(l->seq[1], l->seq[0], sizeof(l->seq[0]));
-        memset(l->seq[0], 0, sizeof(l->seq[0]));
-        memcpy(l->seq[0], buf, Min(Min(size, rc), sizeof(l->seq[0]) - 1));
+    if (rc != -1) {
+        got = rc;
+        if (got > 0 && l) {
+            memcpy(l->seq[1], l->seq[0], sizeof(l->seq[0]));
+            memset(l->seq[0], 0, sizeof(l->seq[0]));
+            memcpy(l->seq[0], buf, Min(Min(size, got), sizeof(l->seq[0]) - 1));
+        }
     }
     return rc;
 }
@@ -1812,30 +1853,17 @@ static void bestlineBeep(void) {
     /* THE TERMINAL BELL IS DEAD - HISTORY HAS KILLED IT */
 }
 
-/* Free a list of completion option populated by bestlineAddCompletion(). */
-void bestlineFreeCompletions(bestlineCompletions *lc) {
-    size_t i;
-    for (i = 0; i < lc->len; i++)
-        free(lc->cvec[i]);
-    if (lc->cvec)
-        free(lc->cvec);
-}
-
-static int bestlineGrow(struct bestlineState *ls, size_t n) {
+static char bestlineGrow(struct bestlineState *ls, size_t n) {
     char *p;
     size_t m;
     m = ls->buflen;
     if (m >= n) return 1;
-    do {
-        m += m >> 1;
-    } while (m < n);
-    if ((p = realloc(ls->buf, m * sizeof(*ls->buf)))) {
-        ls->buf = p;
-        ls->buflen = m;
-        return 1;
-    } else {
-        return 0;
-    }
+    do m += m >> 1;
+    while (m < n);
+    if (!(p = (char *)realloc(ls->buf, m * sizeof(*ls->buf)))) return 0;
+    ls->buf = p;
+    ls->buflen = m;
+    return 1;
 }
 
 /* This is an helper function for bestlineEdit() and is called when the
@@ -1898,7 +1926,7 @@ static ssize_t bestlineCompleteLine(struct bestlineState *ls, char *seq, int siz
     return nread;
 }
 
-static void bestlineEditHistoryGoto(struct bestlineState *l, int i) {
+static void bestlineEditHistoryGoto(struct bestlineState *l, unsigned i) {
     size_t n;
     if (historylen <= 1) return;
     i = Max(Min(i,historylen-1),0);
@@ -1932,10 +1960,12 @@ static char *bestlineMakeSearchPrompt(struct abuf *ab, int fail, const char *s, 
 
 static int bestlineSearch(struct bestlineState *l, char *seq, int size) {
     char *p;
+    char isstale;
     struct abuf ab;
     struct abuf prompt;
+    unsigned i, j, k, matlen;
     const char *oldprompt, *q;
-    int i, j, k, rc, fail, added, oldpos, matlen, oldindex;
+    int rc, fail, added, oldpos, oldindex;
     if (historylen <= 1) return 0;
     abInit(&ab);
     abInit(&prompt);
@@ -1977,10 +2007,16 @@ static int bestlineSearch(struct bestlineState *l, char *seq, int size) {
         } else {
             break;
         }
+        isstale = 0;
         while (i < historylen) {
             p = history[historylen - 1 - i];
             k = strlen(p);
-            j = j >= 0 ? Min(k, j + ab.len) : k;
+            if (!isstale) {
+                j = Min(k, j + ab.len);
+            } else {
+                isstale = 0;
+                j = k;
+            }
             if ((q = FindSubstringReverse(p, j, ab.b, ab.len))) {
                 bestlineEditHistoryGoto(l,i);
                 l->pos = q - p;
@@ -1991,8 +2027,8 @@ static int bestlineSearch(struct bestlineState *l, char *seq, int size) {
                 }
                 break;
             } else {
-                i = i + 1;
-                j = -1;
+                isstale = 1;
+                ++i;
             }
         }
     }
@@ -2002,41 +2038,6 @@ static int bestlineSearch(struct bestlineState *l, char *seq, int size) {
     abFree(&ab);
     bestlineRefreshLine(l);
     return rc;
-}
-
-/* Register a callback function to be called for tab-completion. */
-void bestlineSetCompletionCallback(bestlineCompletionCallback *fn) {
-    completionCallback = fn;
-}
-
-/* Register a hits function to be called to show hits to the user at the
- * right of the prompt. */
-void bestlineSetHintsCallback(bestlineHintsCallback *fn) {
-    hintsCallback = fn;
-}
-
-/* Register a function to free the hints returned by the hints callback
- * registered with bestlineSetHintsCallback(). */
-void bestlineSetFreeHintsCallback(bestlineFreeHintsCallback *fn) {
-    freeHintsCallback = fn;
-}
-
-/* This function is used by the callback function registered by the user
- * in order to add completion options given the input string when the
- * user typed <tab>. See the example.c source code for a very easy to
- * understand example. */
-void bestlineAddCompletion(bestlineCompletions *lc, const char *str) {
-    size_t len;
-    char *copy, **cvec;
-    if ((copy = (char *)malloc((len = strlen(str))+1))) {
-        memcpy(copy,str,len+1);
-        if ((cvec = (char **)realloc(lc->cvec,(lc->len+1)*sizeof(*lc->cvec)))) {
-            lc->cvec = cvec;
-            lc->cvec[lc->len++] = copy;
-        } else {
-            free(copy);
-        }
-    }
 }
 
 static void bestlineRingFree(void) {
@@ -2051,22 +2052,19 @@ static void bestlineRingFree(void) {
 
 static void bestlineRingPush(const char *p, size_t n) {
     char *q;
-    if (BESTLINE_MAX_RING && n) {
-        if ((q = malloc(n))) {
-            ring.i = (ring.i + 1) % BESTLINE_MAX_RING;
-            free(ring.p[ring.i]);
-            ring.p[ring.i] = memcpy(q, p, n);
-        }
-    }
+    if (!n) return;
+    if (!(q = (char *)malloc(n + 1))) return;
+    ring.i = (ring.i + 1) % BESTLINE_MAX_RING;
+    free(ring.p[ring.i]);
+    ring.p[ring.i] = (char *)memcpy(q, p, n);
+    ring.p[ring.i][n] = 0;
 }
 
 static void bestlineRingRotate(void) {
     size_t i;
     for (i = 0; i < BESTLINE_MAX_RING; ++i) {
         ring.i = (ring.i - 1) % BESTLINE_MAX_RING;
-        if (ring.p[ring.i]) {
-            break;
-        }
+        if (ring.p[ring.i]) break;
     }
 }
 
@@ -2088,15 +2086,21 @@ static char *bestlineRefreshHints(struct bestlineState *l) {
 
 static void bestlineRefreshLineImpl(struct bestlineState *l, int force) {
     char *hint;
+    char haswides;
     struct abuf ab;
+    const char *buf;
     struct rune rune;
-    const char *p, *buf;
     struct winsize oldsize;
-    int t, x, y, xn, yn, cx, cy, resized;
-    int i, j, fd, plen, width, pwidth, rows, len, pos;
-    if (!force && poll((struct pollfd[]){{l->ifd, POLLIN}}, 1, 0) == 1) {
+    int fd, plen, rows, len, pos;
+    int i, t, cx, cy, tn, resized;
+    unsigned x, xn, yn, width, pwidth;
+
+    /*
+     * synchonize the i/o state
+     */
+    if (!force && HasPendingInput(l->ifd)) {
         l->dirty = 1;
-        return; /* avoid refresh if there's pending input */
+        return;
     }
     oldsize = l->ws;
     if ((resized = gotwinch) && rawmode != -1) {
@@ -2112,17 +2116,18 @@ StartOver:
     xn = l->ws.ws_col;
     yn = l->ws.ws_row;
     plen = strlen(l->prompt);
-    pwidth = GetMonospaceWidth(l->prompt, plen);
-    width = GetMonospaceWidth(buf, len);
+    pwidth = GetMonospaceWidth(l->prompt, plen, 0);
+    width = GetMonospaceWidth(buf, len, &haswides);
 
     /*
      * handle the case where the line is larger than the whole display
      * gnu readline actually isn't able to deal with this situation!!!
+     * we kludge xn to address the edge case of wide chars on the edge
      */
-    for (;;) {
-        if (pwidth + width + 1 < (xn-1) * yn) break; /* we're fine */
-        if (!len || width < 2) break;                /* we can't do anything */
-        if (pwidth + 2 > (xn-1) * yn) break;         /* we can't do anything */
+    for (tn = xn - haswides;;) {
+        if (pwidth + width + 1 < tn * yn) break; /* we're fine */
+        if (!len || width < 2) break;            /* we can't do anything */
+        if (pwidth + 2 > tn * yn) break;         /* we can't do anything */
         if (pos > len / 2) {
             /* hide content on the left if we're editing on the right */
             rune = GetUtf8(buf, len);
@@ -2140,20 +2145,15 @@ StartOver:
             width -= t;
         }
     }
-
     pos = Max(0, Min(pos, len));
 
     /*
      * now generate the terminal codes to update the line
      *
-     * we insert our own special ansi codes for \r\n manually because a
-     * terminal driver might have a different understanding of character
-     * width than we do, and we'll want to recover as best as possible.
-     *
-     * since we support unlimited lines it's important that we don't clear
-     * the screen before we draw the screen. doing that causes flickering.
-     * the key with terminals is to overwrite cells and use \e[K (and
-     * possibly also \e[0m) to clear whatever remains on a given line.
+     * since we support unlimited lines it's important that we don't
+     * clear the screen before we draw the screen. doing that causes
+     * flickering. the key with terminals is to overwrite cells, and
+     * then use \e[K and \e[J to clear everything else.
      *
      * we make the assumption that prompts and hints may contain ansi
      * sequences, but the buffer does not.
@@ -2167,23 +2167,23 @@ StartOver:
     cx = -1;
     rows = 1;
     abInit(&ab);
-    abAppendw(&ab, '\r');
+    abAppendw(&ab, '\r'); /* start of line */
     if (l->rows - l->oldpos - 1 > 0) {
         abAppends(&ab, "\033[");
         abAppendu(&ab, l->rows - l->oldpos - 1);
-        abAppendw(&ab, 'A'); /* cursor up */
+        abAppendw(&ab, 'A'); /* cursor up clamped */
     }
     abAppends(&ab, l->prompt);
     x = pwidth;
     for (i = 0; i < len; i += rune.n) {
         rune = GetUtf8(buf + i, len - i);
         if (x && x + rune.n > xn) {
-            x = 0;
-            ++rows;
             if (cy >= 0) ++cy;
-            abAppends(&ab, "\033[K"  /* clear forward */
-                           "\r"      /* start */
-                           "\033E"); /* next line */
+            abAppends(&ab, "\033[K"  /* clear line forward */
+                           "\r"      /* start of line */
+                           "\n");    /* cursor down unclamped */
+            ++rows;
+            x = 0;
         }
         if (i == pos) {
             cy = 0;
@@ -2199,7 +2199,7 @@ StartOver:
         x += t;
     }
     if ((hint = bestlineRefreshHints(l))) {
-        if (GetMonospaceWidth(hint, strlen(hint)) < xn - x) {
+        if (GetMonospaceWidth(hint, strlen(hint), 0) < xn - x) {
             if (cx < 0) {
                 cx = x;
             }
@@ -2210,8 +2210,8 @@ StartOver:
     abAppendw(&ab, Read32le("\033[J")); /* erase display forwards */
 
     /*
-     * If we are at the very end of the screen with our prompt, we need to
-     * emit a newline and move the prompt to the first column.
+     * if we are at the very end of the screen with our prompt, we need
+     * to emit a newline and move the prompt to the first column.
      */
     if (pos && pos == len && x >= xn) {
         abAppendw(&ab, Read32le("\n\r\0"));
@@ -2264,14 +2264,13 @@ static void bestlineRefreshLineForce(struct bestlineState *l) {
 
 static void bestlineEditInsert(struct bestlineState *l,
                                const char *p, size_t n) {
-    if (bestlineGrow(l, l->len + n + 1)) {
-        memmove(l->buf + l->pos + n, l->buf + l->pos, l->len - l->pos);
-        memcpy(l->buf + l->pos, p, n);
-        l->pos += n;
-        l->len += n;
-        l->buf[l->len] = 0;
-        bestlineRefreshLine(l);
-    }
+    if (!bestlineGrow(l, l->len + n + 1)) return;
+    memmove(l->buf + l->pos + n, l->buf + l->pos, l->len - l->pos);
+    memcpy(l->buf + l->pos, p, n);
+    l->pos += n;
+    l->len += n;
+    l->buf[l->len] = 0;
+    bestlineRefreshLine(l);
 }
 
 static void bestlineEditHome(struct bestlineState *l) {
@@ -2317,7 +2316,7 @@ static size_t Backward(struct bestlineState *l, size_t pos) {
     return pos;
 }
 
-static size_t Backwards(struct bestlineState *l, size_t pos, int pred(int)) {
+static size_t Backwards(struct bestlineState *l, size_t pos, char pred(unsigned)) {
     size_t i;
     struct rune r;
     while (pos) {
@@ -2332,7 +2331,7 @@ static size_t Backwards(struct bestlineState *l, size_t pos, int pred(int)) {
     return pos;
 }
 
-static size_t Forwards(struct bestlineState *l, size_t pos, int pred(int)) {
+static size_t Forwards(struct bestlineState *l, size_t pos, char pred(unsigned)) {
     struct rune r;
     while (pos < l->len) {
         r = GetUtf8(l->buf + pos, l->len - pos);
@@ -2437,11 +2436,11 @@ static void bestlineEditRuboutWord(struct bestlineState *l) {
     bestlineRefreshLine(l);
 }
 
-static void bestlineEditXlatWord(struct bestlineState *l, int xlat(int)) {
-    int c;
+static void bestlineEditXlatWord(struct bestlineState *l, unsigned xlat(unsigned)) {
+    unsigned c;
+    size_t i, j;
     struct rune r;
     struct abuf ab;
-    size_t i, j;
     abInit(&ab);
     i = Forwards(l, l->pos, IsSeparator);
     for (j = i; j < l->len; j += r.n) {
@@ -2499,8 +2498,8 @@ static void bestlineEditYank(struct bestlineState *l) {
     size_t n;
     if (!ring.p[ring.i]) return;
     n = strlen(ring.p[ring.i]);
-    bestlineGrow(l, l->len + n + 1);
-    p = malloc(l->len - l->pos + 1);
+    if (!bestlineGrow(l, l->len + n + 1)) return;
+    if (!(p = (char *)malloc(l->len - l->pos + 1))) return;
     memcpy(p, l->buf + l->pos, l->len - l->pos + 1);
     memcpy(l->buf + l->pos, ring.p[ring.i], n);
     memcpy(l->buf + l->pos + n, p, l->len - l->pos + 1);
@@ -2535,7 +2534,7 @@ static void bestlineEditTranspose(struct bestlineState *l) {
     p = q = (char *)malloc(c - a);
     p = Copy(p, l->buf + b, c - b);
     p = Copy(p, l->buf + a, b - a);
-    assert(p - q == c - a);
+    assert((size_t)(p - q) == c - a);
     memcpy(l->buf + a, q, p - q);
     l->pos = c;
     free(q);
@@ -2555,7 +2554,7 @@ static void bestlineEditTransposeWords(struct bestlineState *l) {
     p = Copy(p, l->buf + yi, yj - yi);
     p = Copy(p, l->buf + xj, yi - xj);
     p = Copy(p, l->buf + xi, xj - xi);
-    assert(p - q == yj - xi);
+    assert((size_t)(p - q) == yj - xi);
     memcpy(l->buf + xi, q, p - q);
     l->pos = yj;
     free(q);
@@ -2603,7 +2602,7 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
     struct bestlineState l;
     bestlineHintsCallback *hc;
     memset(&l,0,sizeof(l));
-    if (!(l.buf = malloc((l.buflen = 32)))) return -1;
+    if (!(l.buf = (char *)malloc((l.buflen = 32)))) return -1;
     l.buf[0] = 0;
     l.ifd = stdin_fd;
     l.ofd = stdout_fd;
@@ -2675,7 +2674,7 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
             hintsCallback = 0;
             bestlineRefreshLineForce(&l);
             hintsCallback = hc;
-            if ((p = realloc(l.buf, l.len + 1))) l.buf = p;
+            if ((p = (char *)realloc(l.buf, l.len + 1))) l.buf = p;
             *obuf = l.buf;
             return l.len;
         case 033:
@@ -2783,8 +2782,8 @@ int bestlineHistoryAdd(const char *line) {
  * @return 0 on success, or -1 w/ errno
  */
 int bestlineHistorySave(const char *filename) {
-    int j;
     FILE *fp;
+    unsigned j;
     mode_t old_umask;
     old_umask = umask(S_IXUSR|S_IRWXG|S_IRWXO);
     fp = fopen(filename,"w");
@@ -2864,40 +2863,35 @@ int bestlineHistoryLoad(const char *filename) {
  * @return chomped allocated string of read line or null on eof/error
  */
 char *bestlineRaw(const char *prompt, int infd, int outfd) {
-    int sig;
+    char *buf;
     ssize_t rc;
-    size_t nread;
-    char *buf, *p;
-    sigset_t omask;
     static char once;
-    struct sigaction sa;
+    struct sigaction sa[3];
     if (!once) atexit(bestlineAtExit), once = 1;
     if (enableRawMode(infd) == -1) return 0;
-    sigemptyset(&sa.sa_mask);
-    sigaddset(&sa.sa_mask,SIGINT);
-    sigaddset(&sa.sa_mask,SIGQUIT);
-    sigprocmask(SIG_BLOCK,&sa.sa_mask,&omask);
-    sa.sa_flags = SA_NODEFER;
-    sa.sa_handler = bestlineOnInt;
-    sigaction(SIGINT,&sa,&orig_int);
-    sa.sa_handler = bestlineOnQuit;
-    sigaction(SIGQUIT,&sa,&orig_quit);
-    if (!(sig = setjmp(jraw))) {
-        sigprocmask(SIG_UNBLOCK,&sa.sa_mask,0);
-        rc = bestlineEdit(infd,outfd,prompt,&buf);
-    } else {
+    buf = 0;
+    gotint = 0;
+    sigemptyset(&sa->sa_mask);
+    sa->sa_flags = 0;
+    sa->sa_handler = bestlineOnInt;
+    sigaction(SIGINT,sa,sa+1);
+    sigaction(SIGQUIT,sa,sa+2);
+    rc = bestlineEdit(infd,outfd,prompt,&buf);
+    bestlineDisableRawMode();
+    sigaction(SIGQUIT,sa+2,0);
+    sigaction(SIGINT,sa+1,0);
+    if (gotint) {
+        free(buf);
+        buf = 0;
+        raise(gotint);
+        errno = EINTR;
         rc = -1;
     }
-    bestlineDisableRawMode();
-    sigaction(SIGINT,&orig_int,0);
-    sigaction(SIGQUIT,&orig_quit,0);
-    sigprocmask(SIG_SETMASK,&omask,0);
-    if (sig) raise(sig);
     if (rc != -1) {
-        nread = rc;
         bestlineWriteStr(outfd,"\n");
         return buf;
     } else {
+        free(buf);
         return 0;
     }
 }
@@ -2997,4 +2991,85 @@ char *bestlineWithHistory(const char *prompt, const char *prog) {
     }
     abFree(&path);
     return line;
+}
+
+/**
+ * Registers tab completion callback.
+ */
+void bestlineSetCompletionCallback(bestlineCompletionCallback *fn) {
+    completionCallback = fn;
+}
+
+/**
+ * Registers hints callback.
+ *
+ * Register a hits function to be called to show hits to the user at the
+ * right of the prompt.
+ */
+void bestlineSetHintsCallback(bestlineHintsCallback *fn) {
+    hintsCallback = fn;
+}
+
+/**
+ * Sets free hints callback.
+ *
+ * This registers a function to free the hints returned by the hints
+ * callback registered with bestlineSetHintsCallback().
+ */
+void bestlineSetFreeHintsCallback(bestlineFreeHintsCallback *fn) {
+    freeHintsCallback = fn;
+}
+
+/**
+ * Adds completion.
+ *
+ * This function is used by the callback function registered by the user
+ * in order to add completion options given the input string when the
+ * user typed <tab>. See the example.c source code for a very easy to
+ * understand example.
+ */
+void bestlineAddCompletion(bestlineCompletions *lc, const char *str) {
+    size_t len;
+    char *copy, **cvec;
+    if ((copy = (char *)malloc((len = strlen(str))+1))) {
+        memcpy(copy,str,len+1);
+        if ((cvec = (char **)realloc(lc->cvec,(lc->len+1)*sizeof(*lc->cvec)))) {
+            lc->cvec = cvec;
+            lc->cvec[lc->len++] = copy;
+        } else {
+            free(copy);
+        }
+    }
+}
+
+/**
+ * Frees list of completion option populated by bestlineAddCompletion().
+ */
+void bestlineFreeCompletions(bestlineCompletions *lc) {
+    size_t i;
+    for (i = 0; i < lc->len; i++)
+        free(lc->cvec[i]);
+    if (lc->cvec)
+        free(lc->cvec);
+}
+
+/**
+ * Enables "mask mode".
+ *
+ * When it is enabled, instead of the input that the user is typing, the
+ * terminal will just display a corresponding number of asterisks, like
+ * "****". This is useful for passwords and other secrets that should
+ * not be displayed.
+ *
+ * @see bestlineMaskModeDisable()
+ */
+void bestlineMaskModeEnable(void) {
+    maskmode = 1;
+}
+
+/**
+ * Disables "mask mode".
+ */
+void bestlineMaskModeDisable(void) {
+    maskmode = 0;
 }

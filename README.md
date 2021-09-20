@@ -12,11 +12,17 @@ easy as possible to display a command prompt that asks the user for
 input. It supports Emacs editing shortcuts, history search, completion /
 hint callback, and utf-8 editing under a bsd-2 license.
 
-Bestline is a fork of linenoise (a popular readline alternative)
-that fixes its bugs and adds the missing features while reducing
-binary footprint (surprisingly) by removing bloated dependencies
-which means you can finally have a permissively-licensed command
-prompt w/ a 30kb footprint that's nearly as good as gnu readline
+Bestline is a fork of linenoise (a popular readline alternative) that
+fixes its bugs and adds the missing features while reducing binary
+footprint (surprisingly) by removing bloated dependencies which means
+you can finally have a permissively-licensed command prompt w/ a 38kb
+footprint that's nearly as good as gnu readline.
+
+```
+$ CC="cc -s -static -Os -DNDEBUG" make
+$ ls -hal bestline_example
+-rwxr-xr-x 1 jart jart 38K Sep 19 21:41 bestline_example
+```
 
 # Example
 
