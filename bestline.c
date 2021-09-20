@@ -120,8 +120,10 @@
 #include "bestline.h"
 
 #ifndef __COSMOPOLITAN__
-#define _POSIX_C_SOURCE 1
-#define _XOPEN_SOURCE 700
+#define _POSIX_C_SOURCE  1 /* so GCC builds in ANSI mode */
+#define _XOPEN_SOURCE  700 /* so GCC builds in ANSI mode */
+#define _DARWIN_C_SOURCE 1 /* for SIGWINCH and IUTF8 on XNU */
+#define _DARWIN_C_SOURCE 1 /* for SIGWINCH on XNU */
 #include <termios.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -134,6 +136,7 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/signal.h>
 #include <unistd.h>
 #include <setjmp.h>
 #include <poll.h>
@@ -1659,7 +1662,9 @@ static int enableRawMode(int fd) {
         raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP);
         raw.c_lflag &= ~(ECHO | ICANON | IEXTEN);
         raw.c_oflag &= ~OPOST;
+#ifdef IUTF8
         raw.c_iflag |= IUTF8;
+#endif
         raw.c_cflag |= CS8;
         raw.c_cc[VMIN] = 1;
         raw.c_cc[VTIME] = 0;
@@ -1669,7 +1674,9 @@ static int enableRawMode(int fd) {
             sigemptyset(&sa.sa_mask);
             sigaction(SIGCONT,&sa,&orig_cont);
             sa.sa_handler = bestlineOnWinch;
+#ifdef SIGWINCH
             sigaction(SIGWINCH,&sa,&orig_winch);
+#endif
             rawmode = fd;
             gotwinch = 0;
             gotcont = 0;
@@ -1683,7 +1690,9 @@ static int enableRawMode(int fd) {
 void bestlineDisableRawMode(void) {
     if (rawmode != -1) {
         sigaction(SIGCONT,&orig_cont,0);
+#ifdef SIGWINCH
         sigaction(SIGWINCH,&orig_winch,0);
+#endif
         tcsetattr(rawmode,TCSAFLUSH,&orig_termios);
         rawmode = -1;
     }
@@ -2041,10 +2050,13 @@ static void bestlineRingFree(void) {
 }
 
 static void bestlineRingPush(const char *p, size_t n) {
+    char *q;
     if (BESTLINE_MAX_RING && n) {
-        ring.i = (ring.i + 1) % BESTLINE_MAX_RING;
-        free(ring.p[ring.i]);
-        ring.p[ring.i] = strndup(p, n);
+        if ((q = malloc(n))) {
+            ring.i = (ring.i + 1) % BESTLINE_MAX_RING;
+            free(ring.p[ring.i]);
+            ring.p[ring.i] = memcpy(q, p, n);
+        }
     }
 }
 
@@ -2229,6 +2241,7 @@ StartOver:
     l->rows = rows;
     if (resized && oldsize.ws_col > l->ws.ws_col) {
         resized = 0;
+        abFree(&ab);
         goto StartOver;
     }
     l->dirty = 0;

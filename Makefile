@@ -1,7 +1,7 @@
 all: bestline_example
 
 bestline_example: bestline.o example.o
-	$(LINK.c) $^ $(LOADLIBES) $(LDLIBS) $(OUTPUT_OPTION)
+	$(CC) $(LDFLAGS) bestline.o example.o -o $@
 
 bestline.o: bestline.c bestline.h
 example.o: example.c bestline.h
