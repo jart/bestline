@@ -28,7 +28,7 @@ statically linked with Cosmopolitan Libc.
 #include "bestline.h"
 main() {
     char *line;
-    while ((line = ezbestline("IN> ", "foo"))) {
+    while ((line = bestlineWithHistory("IN> ", "foo"))) {
         fputs("OUT> ", stdout);
         fputs(line, stdout);
         fputs("\n", stdout);

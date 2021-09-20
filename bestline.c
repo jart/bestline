@@ -17,7 +17,7 @@
 │                                                                              │
 │   main() {                                                                   │
 │       char *line;                                                            │
-│       while ((line = ezbestline("IN> ", "foo"))) {                           │
+│       while ((line = bestlineWithHistory("IN> ", "foo"))) {                  │
 │           fputs("OUT> ", stdout);                                            │
 │           fputs(line, stdout);                                               │
 │           fputs("\n", stdout);                                               │
@@ -2931,7 +2931,7 @@ char *bestline(const char *prompt) {
  *     // see ~/.foo_history
  *     main() {
  *         char *line;
- *         while ((line = ezbestline("IN> ", "foo"))) {
+ *         while ((line = bestlineWithHistory("IN> ", "foo"))) {
  *             printf("OUT> %s\n", line);
  *             free(line);
  *         }
@@ -2945,7 +2945,7 @@ char *bestline(const char *prompt) {
  *     the history filename which as determined by the caller
  * @return chomped allocated string of read line or null on eof/error
  */
-char *ezbestline(const char *prompt, const char *prog) {
+char *bestlineWithHistory(const char *prompt, const char *prog) {
     char *line;
     struct abuf path;
     const char *a, *b;

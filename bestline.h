@@ -17,7 +17,7 @@ void bestlineAddCompletion(bestlineCompletions *, const char *);
 
 char *bestline(const char *);
 char *bestlineRaw(const char *, int, int);
-char *ezbestline(const char *, const char *);
+char *bestlineWithHistory(const char *, const char *);
 int bestlineHistoryAdd(const char *);
 int bestlineHistorySave(const char *);
 int bestlineHistoryLoad(const char *);

@@ -12,7 +12,7 @@
 // cc -fno-jump-tables -Os -o foo foo.c bestline.c
 int main() {
     char *line;
-    while ((line = ezbestline("IN> ", "foo"))) {
+    while ((line = bestlineWithHistory("IN> ", "foo"))) {
         fputs("OUT> ", stdout);
         fputs(line, stdout);
         fputs("\n", stdout);
