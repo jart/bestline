@@ -46,7 +46,7 @@
 │   - Remove heavyweight dependencies like printf/sprintf                      │
 │   - Remove ISIG→^C→EAGAIN hack and catch signals properly                    │
 │   - Support running on Windows in MinTTY or CMD.EXE on Win10+                │
-│   - Support diacratics, русский, Ελληνικά, 中国人, 한국인, 日本              │
+│   - Support diacratics, русский, Ελληνικά, 中国人, 日本語, 한국인            │
 │                                                                              │
 │ SHORTCUTS                                                                    │
 │                                                                              │
@@ -236,6 +236,18 @@ static bestlineCompletionCallback *completionCallback;
 
 static void bestlineAtExit(void);
 static void bestlineRefreshLine(struct bestlineState *);
+
+static void bestlineOnInt(int sig) {
+    gotint = sig;
+}
+
+static void bestlineOnCont(int sig) {
+    gotcont = sig;
+}
+
+static void bestlineOnWinch(int sig) {
+    gotwinch = sig;
+}
 
 static char IsControl(unsigned c) {
     return c <= 0x1F || (0x7F <= c && c <= 0x9F);
@@ -1125,80 +1137,6 @@ static struct rune GetUtf8(const char *p, size_t n) {
     return r;
 }
 
-static size_t GetFdSize(int fd) {
-    struct stat st;
-    st.st_size = 0;
-    fstat(fd, &st);
-    return st.st_size;
-}
-
-static char *GetLine(FILE *f) {
-    ssize_t rc;
-    char *p = 0;
-    size_t n, c = 0;
-    if ((rc = getdelim(&p, &c, '\n', f)) != EOF) {
-        for (n = rc; n; --n) {
-            if (p[n - 1] == '\r' || p[n - 1] == '\n') {
-                p[n - 1] = 0;
-            } else {
-                break;
-            }
-        }
-        return p;
-    } else {
-        free(p);
-        return 0;
-    }
-}
-
-static char *Copy(char *d, const char *s, size_t n) {
-    memcpy(d, s, n);
-    return d + n;
-}
-
-static int CompareStrings(const char *a, const char *b) {
-    size_t i;
-    int x, y, c;
-    for (i = 0;; ++i) {
-        x = Lowercase(a[i] & 255);
-        y = Lowercase(b[i] & 255);
-        if ((c = x - y) || !x) {
-            return c;
-        }
-    }
-}
-
-static const char *FindSubstringReverse(const char *p, size_t n,
-                                        const char *q, size_t m) {
-    size_t i;
-    if (m <= n) {
-        for (n -= m; n; --n) {
-            for (i = 0; i < m; ++i) {
-                if (p[n + i] != q[i]) {
-                    break;
-                }
-            }
-            if (i == m) {
-                return p + n;
-            }
-        }
-    }
-    return 0;
-}
-
-static int ParseUnsigned(const char *s, void *e) {
-    int c, x;
-    for (x = 0; (c = *s++);) {
-        if ('0' <= c && c <= '9') {
-            x = Min(c - '0' + x * 10, 32767);
-        } else {
-            break;
-        }
-    }
-    if (e) *(const char **)e = s;
-    return x;
-}
-
 static char *FormatUnsigned(char *p, unsigned x) {
     char t;
     size_t i, a, b;
@@ -1218,6 +1156,75 @@ static char *FormatUnsigned(char *p, unsigned x) {
     return p + i;
 }
 
+static void abInit(struct abuf *a) {
+    a->len = 0;
+    a->cap = 16;
+    a->b = (char *)malloc(a->cap);
+    a->b[0] = 0;
+}
+
+static char abGrow(struct abuf *a, int need) {
+    int cap;
+    char *b;
+    cap = a->cap;
+    do cap += cap / 2;
+    while (cap < need);
+    if (!(b = (char *)realloc(a->b, cap * sizeof(*a->b)))) return 0;
+    a->cap = cap;
+    a->b = b;
+    return 1;
+}
+
+static void abAppendw(struct abuf *a, unsigned long long w) {
+    char *p;
+    if (a->len + 8 > a->cap && !abGrow(a, a->len + 8)) return;
+    p = a->b + a->len;
+    p[0] = (0x00000000000000FFull & w) >> 000;
+    p[1] = (0x000000000000FF00ull & w) >> 010;
+    p[2] = (0x0000000000FF0000ull & w) >> 020;
+    p[3] = (0x00000000FF000000ull & w) >> 030;
+    p[4] = (0x000000FF00000000ull & w) >> 040;
+    p[5] = (0x0000FF0000000000ull & w) >> 050;
+    p[6] = (0x00FF000000000000ull & w) >> 060;
+    p[7] = (0xFF00000000000000ull & w) >> 070;
+    a->len += w ? (Bsr(w) >> 3) + 1 : 1;
+}
+
+static void abAppend(struct abuf *a, const char *s, int len) {
+    if (a->len + len + 1 > a->cap && !abGrow(a, a->len + len + 1)) return;
+    memcpy(a->b + a->len, s, len);
+    a->b[a->len + len] = 0;
+    a->len += len;
+}
+
+static void abAppends(struct abuf *a, const char *s) {
+    abAppend(a, s, strlen(s));
+}
+
+static void abAppendu(struct abuf *a, unsigned u) {
+    char b[11];
+    abAppend(a, b, FormatUnsigned(b, u) - b);
+}
+
+static void abFree(struct abuf *a) {
+    free(a->b);
+    a->b = 0;
+}
+
+static size_t GetFdSize(int fd) {
+    struct stat st;
+    st.st_size = 0;
+    fstat(fd, &st);
+    return st.st_size;
+}
+
+static char IsCharDev(int fd) {
+    struct stat st;
+    st.st_mode = 0;
+    fstat(fd, &st);
+    return (st.st_mode & S_IFMT) == S_IFCHR;
+}
+
 static int WaitUntilReady(int fd, int events) {
     struct pollfd p[1];
     p[0].fd = fd;
@@ -1230,6 +1237,25 @@ static char HasPendingInput(int fd) {
     p[0].fd = fd;
     p[0].events = POLLIN;
     return poll(p, 1, 0) == 1;
+}
+
+static char *GetLineBlock(FILE *f) {
+    ssize_t rc;
+    char *p = 0;
+    size_t n, c = 0;
+    if ((rc = getdelim(&p, &c, '\n', f)) != EOF) {
+        for (n = rc; n; --n) {
+            if (p[n - 1] == '\r' || p[n - 1] == '\n') {
+                p[n - 1] = 0;
+            } else {
+                break;
+            }
+        }
+        return p;
+    } else {
+        free(p);
+        return 0;
+    }
 }
 
 static ssize_t ReadCharacter(int fd, char *p, size_t n) {
@@ -1444,6 +1470,142 @@ static ssize_t ReadCharacter(int fd, char *p, size_t n) {
     return i;
 }
 
+static char *GetLineChar(int fin, int fout) {
+    size_t got;
+    ssize_t rc;
+    char seq[16];
+    struct abuf a;
+    struct sigaction sa[3];
+    abInit(&a);
+    gotint = 0;
+    sigemptyset(&sa->sa_mask);
+    sa->sa_flags = 0;
+    sa->sa_handler = bestlineOnInt;
+    sigaction(SIGINT,sa,sa+1);
+    sigaction(SIGQUIT,sa,sa+2);
+    for (;;) {
+        if (gotint) {
+            rc = -1;
+            break;
+        }
+        if ((rc = ReadCharacter(fin, seq, sizeof(seq))) == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                if (WaitUntilReady(fin, POLLIN) > 0) {
+                    continue;
+                }
+            }
+            if (errno == EINTR) {
+                continue;
+            } else {
+                break;
+            }
+        }
+        if (!(got = rc)) {
+            if (a.len) {
+                break;
+            } else {
+                rc = -1;
+                break;
+            }
+        }
+        if (seq[0] == '\r') {
+            if (HasPendingInput(fin)) {
+                if ((rc = ReadCharacter(fin, seq + 1, sizeof(seq) - 1)) > 0) {
+                    if (seq[0] == '\n') {
+                        break;
+                    }
+                } else {
+                    rc = -1;
+                    break;
+                }
+            } else {
+                write(fout, "\n", 1);
+                break;
+            }
+        } else if (seq[0] == Ctrl('D')) {
+            break;
+        } else if (seq[0] == '\n') {
+            break;
+        } else if (seq[0] == '\b') {
+            while (a.len && (a.b[a.len - 1] & 0300) == 0200) --a.len;
+            if (a.len) --a.len;
+        }
+        if (!IsControl(seq[0])) {
+            abAppend(&a, seq, got);
+        }
+    }
+    sigaction(SIGQUIT,sa+2,0);
+    sigaction(SIGINT,sa+1,0);
+    if (gotint) {
+        abFree(&a);
+        raise(gotint);
+        errno = EINTR;
+        rc = -1;
+    }
+    if (rc != -1) {
+        return a.b;
+    } else {
+        abFree(&a);
+        return 0;
+    }
+}
+
+static char *GetLine(FILE *in, FILE *out) {
+    if (!IsCharDev(fileno(in))) {
+        return GetLineBlock(in);
+    } else {
+        return GetLineChar(fileno(in), fileno(out));
+    }
+}
+
+static char *Copy(char *d, const char *s, size_t n) {
+    memcpy(d, s, n);
+    return d + n;
+}
+
+static int CompareStrings(const char *a, const char *b) {
+    size_t i;
+    int x, y, c;
+    for (i = 0;; ++i) {
+        x = Lowercase(a[i] & 255);
+        y = Lowercase(b[i] & 255);
+        if ((c = x - y) || !x) {
+            return c;
+        }
+    }
+}
+
+static const char *FindSubstringReverse(const char *p, size_t n,
+                                        const char *q, size_t m) {
+    size_t i;
+    if (m <= n) {
+        for (n -= m; n; --n) {
+            for (i = 0; i < m; ++i) {
+                if (p[n + i] != q[i]) {
+                    break;
+                }
+            }
+            if (i == m) {
+                return p + n;
+            }
+        }
+    }
+    return 0;
+}
+
+static int ParseUnsigned(const char *s, void *e) {
+    int c, x;
+    for (x = 0; (c = *s++);) {
+        if ('0' <= c && c <= '9') {
+            x = Min(c - '0' + x * 10, 32767);
+        } else {
+            break;
+        }
+    }
+    if (e) *(const char **)e = s;
+    return x;
+}
+
 static size_t GetMonospaceWidth(const char *p, size_t n, char *out_haswides) {
     int c, d;
     size_t i, w;
@@ -1600,73 +1762,6 @@ static size_t GetMonospaceWidth(const char *p, size_t n, char *out_haswides) {
         *out_haswides = haswides;
     }
     return w;
-}
-
-static void abInit(struct abuf *a) {
-    a->len = 0;
-    a->cap = 16;
-    a->b = (char *)malloc(a->cap);
-    a->b[0] = 0;
-}
-
-static char abGrow(struct abuf *a, int need) {
-    int cap;
-    char *b;
-    cap = a->cap;
-    do cap += cap / 2;
-    while (cap < need);
-    if (!(b = (char *)realloc(a->b, cap * sizeof(*a->b)))) return 0;
-    a->cap = cap;
-    a->b = b;
-    return 1;
-}
-
-static void abAppendw(struct abuf *a, unsigned long long w) {
-    char *p;
-    if (a->len + 8 + 1 > a->cap && !abGrow(a, a->len + 8 + 1)) return;
-    p = a->b + a->len;
-    p[0] = (0x00000000000000FFull & w) >> 000;
-    p[1] = (0x000000000000FF00ull & w) >> 010;
-    p[2] = (0x0000000000FF0000ull & w) >> 020;
-    p[3] = (0x00000000FF000000ull & w) >> 030;
-    p[4] = (0x000000FF00000000ull & w) >> 040;
-    p[5] = (0x0000FF0000000000ull & w) >> 050;
-    p[6] = (0x00FF000000000000ull & w) >> 060;
-    p[7] = (0xFF00000000000000ull & w) >> 070;
-    a->len += w ? (Bsr(w) >> 3) + 1 : 1;
-    p[8] = 0;
-}
-
-static void abAppend(struct abuf *a, const char *s, int len) {
-    if (a->len + len + 1 > a->cap && !abGrow(a, a->len + len + 1)) return;
-    memcpy(a->b + a->len, s, len);
-    a->b[a->len + len] = 0;
-    a->len += len;
-}
-
-static void abAppends(struct abuf *a, const char *s) {
-    abAppend(a, s, strlen(s));
-}
-
-static void abAppendu(struct abuf *a, unsigned u) {
-    char b[11];
-    abAppend(a, b, FormatUnsigned(b, u) - b);
-}
-
-static void abFree(struct abuf *a) {
-    free(a->b);
-}
-
-static void bestlineOnInt(int sig) {
-    gotint = sig;
-}
-
-static void bestlineOnCont(int sig) {
-    gotcont = sig;
-}
-
-static void bestlineOnWinch(int sig) {
-    gotwinch = sig;
 }
 
 static int bestlineIsUnsupportedTerm(void) {
@@ -2124,7 +2219,7 @@ StartOver:
      * gnu readline actually isn't able to deal with this situation!!!
      * we kludge xn to address the edge case of wide chars on the edge
      */
-    for (tn = xn - haswides;;) {
+    for (tn = xn - haswides * 2;;) {
         if (pwidth + width + 1 < tn * yn) break; /* we're fine */
         if (!len || width < 2) break;            /* we can't do anything */
         if (pwidth + 2 > tn * yn) break;         /* we can't do anything */
@@ -2919,13 +3014,18 @@ char *bestline(const char *prompt) {
     }
     if ((!isatty(fileno(stdin)) ||
          !isatty(fileno(stdout)))) {
-        return GetLine(stdin);
+        if (prompt && *prompt && (IsCharDev(fileno(stdin)) &&
+                                  IsCharDev(fileno(stdout)))) {
+            fputs(prompt,stdout);
+            fflush(stdout);
+        }
+        return GetLine(stdin, stdout);
     } else if (bestlineIsUnsupportedTerm()) {
         if (prompt && *prompt) {
             fputs(prompt,stdout);
             fflush(stdout);
         }
-        return GetLine(stdin);
+        return GetLine(stdin, stdout);
     } else {
         fflush(stdout);
         return bestlineRaw(prompt,fileno(stdin),fileno(stdout));

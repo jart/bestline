@@ -93,6 +93,7 @@ Here's what we've changed compared to
 
 - Remove bell
 - Add kill ring
+- Fix flickering
 - Add UTF-8 editing
 - Add CTRL-R search
 - React to terminal resizing
@@ -100,6 +101,7 @@ Here's what we've changed compared to
 - Support terminal flow control
 - Make history loading 10x faster
 - Make multiline mode the only mode
+- Support unlimited input line length
 - Accommodate O_NONBLOCK file descriptors
 - Restore raw mode on process foregrounding
 - Make source code compatible with C++ compilers
@@ -108,24 +110,24 @@ Here's what we've changed compared to
 - Remove heavyweight dependencies like printf/sprintf
 - Remove ISIG→^C→EAGAIN hack and catch signals properly
 - Support running on Windows in MinTTY or CMD.EXE on Win10+
-- Support diacratics, русский, Ελληνικά, 中国人, 한국인, 日本
+- Support diacratics, русский, Ελληνικά, 中国人, 日本語, 한국인
 
 ## Readability
 
 This codebase aims to follow in Antirez's tradition of writing beautiful
-programs, that solve extremely difficult difficult technical problems in
-the simplest most elegant way possible. The original Linenoise source
-code is sort of like an old Delorean where it's simple and beautiful,
-but has a lot of things broken about it that need to be fixed, which
-gives you plenty of reasons to sit down and fix things to fully
-appreciate its beauty.
+programs, that solve extremely difficult technical problems in the most
+elegant way possible. The original Linenoise source code is sort of like
+an old Delorean where it's simple and beautiful, but has a lot of things
+broken about it that need to be fixed, which gives you plenty of reasons
+to sit down and fix things to fully appreciate its beauty.
 
 There are however some differences in style. Antirez generally optimizes
 for fewer lines of code even if it makes the binary footprint larger and
-ignore edge cases while instilling a cultural bias for Engilsh language.
-For example, one of the biggest issues with Linenoise, was that pressing
-the wrong key on the keyboard would mess with the state and garble input
-since it didn't actually parse ansi codes or even multibyte characters.
+with poor edge case handling and cultural biases presumably to preserve
+its accessibility and value as an educational tool. For example, one of
+the biggest issues with Linenoise, was that pressing the wrong key on
+the keyboard would mess with the state and garble input since it didn't
+actually parse ansi codes or even multibyte characters.
 
 While this project has addressed many of Linenoise's shortcomings, we've
 sought to do it in a way that carries on the Antirez tradition of simple
