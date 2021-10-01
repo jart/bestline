@@ -14,7 +14,7 @@ hint callback, and utf-8 editing under a bsd-2 license.
 
 Bestline is a fork of linenoise (a popular readline alternative) that
 fixes its bugs and adds the missing features while reducing binary
-footprint (surprisingly) by removing bloated dependencies which means
+footprint (surprisingly) by removing bloated dependencies, which means
 you can finally have a permissively-licensed command prompt w/ a 38kb
 footprint that's nearly as good as gnu readline.
 
@@ -110,7 +110,7 @@ Here's what we've changed compared to
 - Remove heavyweight dependencies like printf/sprintf
 - Remove ISIG→^C→EAGAIN hack and catch signals properly
 - Support running on Windows in MinTTY or CMD.EXE on Win10+
-- Support diacratics, русский, Ελληνικά, 中国人, 日本語, 한국인
+- Support diacritics, русский, Ελληνικά, 中国人, 日本語, 한국인
 
 ## Readability
 
@@ -121,7 +121,7 @@ an old Delorean where it's simple and beautiful, but has a lot of things
 broken about it that need to be fixed, which gives you plenty of reasons
 to sit down and fix things to fully appreciate its beauty.
 
-There are however some differences in style. Antirez generally optimizes
+There are, however, some differences in style. Antirez generally optimizes
 for fewer lines of code even if it makes the binary footprint larger and
 with poor edge case handling and cultural biases presumably to preserve
 its accessibility and value as an educational tool. For example, one of
@@ -146,7 +146,7 @@ these days supports VT100 control codes which were standardized by ANSI
 back in the 1970's. This library ignores platform-specific norms for
 multibyte encoding and it also ignores antiquated terminal capability
 databases. Libraries like ncurses were designed to reduce bandwidth on
-300 bit per second modems. They're bloated and huge because the needed
+300 bit per second modems. They're bloated and huge because they needed
 to implement workarounds to all the "incompatible by design" engineering
 practices used by terminal platforms in the 70's in 80's.
 
