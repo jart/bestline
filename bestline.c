@@ -2819,6 +2819,10 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
             case 'O':
                 if (nread < 3) break;
                 switch (seq[2]) {
+                Case('A', bestlineEditUp(&l));
+                Case('B', bestlineEditDown(&l));
+                Case('C', bestlineEditRight(&l));
+                Case('D', bestlineEditLeft(&l));
                 Case('H', bestlineEditHome(&l));
                 Case('F', bestlineEditEnd(&l));
                 default:
