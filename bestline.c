@@ -32,19 +32,19 @@
 │   - Fix flickering                                                           │
 │   - Add UTF-8 editing                                                        │
 │   - Add CTRL-R search                                                        │
+│   - Support unlimited lines                                                  │
 │   - React to terminal resizing                                               │
 │   - Don't generate .data section                                             │
 │   - Support terminal flow control                                            │
 │   - Make history loading 10x faster                                          │
 │   - Make multiline mode the only mode                                        │
-│   - Support unlimited input line length                                      │
 │   - Accommodate O_NONBLOCK file descriptors                                  │
 │   - Restore raw mode on process foregrounding                                │
 │   - Make source code compatible with C++ compilers                           │
 │   - Fix corruption issues by using generalized parsing                       │
 │   - Implement nearly all GNU readline editing shortcuts                      │
 │   - Remove heavyweight dependencies like printf/sprintf                      │
-│   - Remove ISIG→^C→EAGAIN hack and catch signals properly                    │
+│   - Remove ISIG→^C→EAGAIN hack and use ephemeral handlers                    │
 │   - Support running on Windows in MinTTY or CMD.EXE on Win10+                │
 │   - Support diacratics, русский, Ελληνικά, 中国人, 日本語, 한국인            │
 │                                                                              │
@@ -122,7 +122,7 @@
 #ifndef __COSMOPOLITAN__
 #define _POSIX_C_SOURCE  1 /* so GCC builds in ANSI mode */
 #define _XOPEN_SOURCE  700 /* so GCC builds in ANSI mode */
-#define _DARWIN_C_SOURCE 1 /* for SIGWINCH and IUTF8 on XNU */
+#define _DARWIN_C_SOURCE 1 /* so SIGWINCH / IUTF8 on XNU */
 #include <termios.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -1179,14 +1179,14 @@ static void abAppendw(struct abuf *a, unsigned long long w) {
     char *p;
     if (a->len + 8 > a->cap && !abGrow(a, a->len + 8)) return;
     p = a->b + a->len;
-    p[0] = (0x00000000000000FFull & w) >> 000;
-    p[1] = (0x000000000000FF00ull & w) >> 010;
-    p[2] = (0x0000000000FF0000ull & w) >> 020;
-    p[3] = (0x00000000FF000000ull & w) >> 030;
-    p[4] = (0x000000FF00000000ull & w) >> 040;
-    p[5] = (0x0000FF0000000000ull & w) >> 050;
-    p[6] = (0x00FF000000000000ull & w) >> 060;
-    p[7] = (0xFF00000000000000ull & w) >> 070;
+    p[0] = (0x00000000000000FF & w) >> 000;
+    p[1] = (0x000000000000FF00 & w) >> 010;
+    p[2] = (0x0000000000FF0000 & w) >> 020;
+    p[3] = (0x00000000FF000000 & w) >> 030;
+    p[4] = (0x000000FF00000000 & w) >> 040;
+    p[5] = (0x0000FF0000000000 & w) >> 050;
+    p[6] = (0x00FF000000000000 & w) >> 060;
+    p[7] = (0xFF00000000000000 & w) >> 070;
     a->len += w ? (Bsr(w) >> 3) + 1 : 1;
 }
 
@@ -1422,7 +1422,8 @@ static ssize_t ReadCharacter(int fd, char *p, size_t n) {
         case kCsi1:
             if (0x20 <= c && c <= 0x2f) {
                 t = kCsi2;
-            } else if (c == '[' && i == 3) {
+            } else if (c == '[' && ((i == 3) ||
+                                    (i == 4 && p[1] == 033))) {
                 /* linux function keys */
             } else if (0x40 <= c && c <= 0x7e) {
                 t = kDone;
@@ -1579,7 +1580,8 @@ static const char *FindSubstringReverse(const char *p, size_t n,
                                         const char *q, size_t m) {
     size_t i;
     if (m <= n) {
-        for (n -= m; n; --n) {
+        n -= m;
+        do {
             for (i = 0; i < m; ++i) {
                 if (p[n + i] != q[i]) {
                     break;
@@ -1588,7 +1590,7 @@ static const char *FindSubstringReverse(const char *p, size_t n,
             if (i == m) {
                 return p + n;
             }
-        }
+        } while (n--);
     }
     return 0;
 }
@@ -2905,7 +2907,7 @@ int bestlineHistorySave(const char *filename) {
 int bestlineHistoryLoad(const char *filename) {
     char **h;
     int rc, fd, err;
-    size_t i, j, k, n;
+    size_t i, j, k, n, t;
     char *m, *e, *p, *q, *f, *s;
     err = errno, rc = 0;
     if (!BESTLINE_MAX_HISTORY) return 0;
@@ -2927,8 +2929,8 @@ int bestlineHistoryLoad(const char *filename) {
                 bestlineHistoryFree();
                 for (j = 0; j < BESTLINE_MAX_HISTORY; ++j) {
                     if (h[(k = (i + j) % BESTLINE_MAX_HISTORY) * 2]) {
-                        if ((s = (char *)malloc((n=h[k*2+1]-h[k*2])+1))) {
-                            memcpy(s,h[k*2],n),s[n]=0;
+                        if ((s = (char *)malloc((t=h[k*2+1]-h[k*2])+1))) {
+                            memcpy(s,h[k*2],t),s[t]=0;
                             history[historylen++] = s;
                         }
                     }
