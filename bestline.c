@@ -33,6 +33,7 @@
 │   - Add UTF-8 editing                                                        │
 │   - Add CTRL-R search                                                        │
 │   - Support unlimited lines                                                  │
+│   - Add parentheses awareness                                                │
 │   - React to terminal resizing                                               │
 │   - Don't generate .data section                                             │
 │   - Support terminal flow control                                            │
@@ -50,6 +51,7 @@
 │                                                                              │
 │ SHORTCUTS                                                                    │
 │                                                                              │
+│                                                                              │
 │   CTRL-E         END                                                         │
 │   CTRL-A         START                                                       │
 │   CTRL-B         BACK                                                        │
@@ -66,6 +68,8 @@
 │   ALT->          END OF HISTORY                                              │
 │   ALT-F          FORWARD WORD                                                │
 │   ALT-B          BACKWARD WORD                                               │
+│   CTRL-ALT-F     FORWARD EXPR                                                │
+│   CTRL-ALT-B     BACKWARD EXPR                                               │
 │   CTRL-K         KILL LINE FORWARDS                                          │
 │   CTRL-U         KILL LINE BACKWARDS                                         │
 │   ALT-H          KILL WORD BACKWARDS                                         │
@@ -79,11 +83,15 @@
 │   ALT-U          UPPERCASE WORD                                              │
 │   ALT-L          LOWERCASE WORD                                              │
 │   ALT-C          CAPITALIZE WORD                                             │
+│   CTRL-C         INTERRUPT PROCESS                                           │
+│   CTRL-Z         SUSPEND PROCESS                                             │
+│   CTRL-\         QUIT PROCESS                                                │
+│   CTRL-S         PAUSE OUTPUT                                                │
+│   CTRL-Q         UNPAUSE OUTPUT (IF PAUSED)                                  │
+│   CTRL-Q         ESCAPED INSERT                                              │
 │   CTRL-SPACE     SET MARK                                                    │
 │   CTRL-X CTRL-X  GOTO MARK                                                   │
-│   CTRL-S         PAUSE OUTPUT                                                │
-│   CTRL-Q         RESUME OUTPUT                                               │
-│   CTRL-Z         SUSPEND PROCESS                                             │
+│   PROTIP         REMAP CAPS LOCK TO CTRL                                     │
 │                                                                              │
 ╞══════════════════════════════════════════════════════════════════════════════╡
 │                                                                              │
@@ -173,6 +181,9 @@ Copyright 2010-2013 Pieter Noordhuis <pcnoordhuis@gmail.com>\"");
 #define Min(X, Y)  ((Y) > (X) ? (X) : (Y))
 #define Max(X, Y)  ((Y) < (X) ? (X) : (Y))
 #define Case(X, Y) case X: Y; break
+#define Read16le(X)        \
+  ((255 & (X)[0]) << 000 | \
+   (255 & (X)[1]) << 010)
 #define Read32le(X)                  \
   ((unsigned)(255 & (X)[0]) << 000 | \
    (unsigned)(255 & (X)[1]) << 010 | \
@@ -213,6 +224,7 @@ struct bestlineState {
     unsigned mark;      /* saved cursor position */
     unsigned yi, yj;    /* boundaries of last yank */
     char seq[2][16];    /* keystroke history for yanking code */
+    char final;         /* set to true on last update */
     char dirty;         /* if an update was squashed */
 };
 
@@ -223,6 +235,7 @@ static int gotcont;
 static int gotwinch;
 static char rawmode;
 static char maskmode;
+static char ispaused;
 static char iscapital;
 static unsigned historylen;
 static struct bestlineRing ring;
@@ -277,7 +290,7 @@ static int GetMonospaceCharacterWidth(unsigned c) {
  * other things like blocks and emoji (So).
  */
 static char IsSeparator(unsigned c) {
-    int m, l, r;
+    int m, l, r, n;
     if (c < 0200) {
         return !(('0' <= c && c <= '9') ||
                  ('A' <= c && c <= 'Z') ||
@@ -438,7 +451,7 @@ static char IsSeparator(unsigned c) {
             {0xffda, 0xffdc}, /*     3x Dubs */
         };
         l = 0;
-        r = sizeof(kGlyphs) / sizeof(kGlyphs[0]);
+        r = n = sizeof(kGlyphs) / sizeof(kGlyphs[0]);
         while (l < r) {
             m = (l + r) >> 1;
             if (kGlyphs[m][1] < c) {
@@ -447,7 +460,7 @@ static char IsSeparator(unsigned c) {
                 r = m;
             }
         }
-        return !(kGlyphs[l][0] <= c && c <= kGlyphs[l][1]);
+        return !(l < n && kGlyphs[l][0] <= c && c <= kGlyphs[l][1]);
     } else {
         static const unsigned kAstralGlyphs[][2] = {
             {0x10107, 0x10133}, /*    45x Aegean */
@@ -658,7 +671,7 @@ static char IsSeparator(unsigned c) {
             {0x2f800, 0x2fa1d}, /*   542x CJK Compatibility Ideographs Supplement */
         };
         l = 0;
-        r = sizeof(kAstralGlyphs) / sizeof(kAstralGlyphs[0]);
+        r = n = sizeof(kAstralGlyphs) / sizeof(kAstralGlyphs[0]);
         while (l < r) {
             m = (l + r) >> 1;
             if (kAstralGlyphs[m][1] < c) {
@@ -667,12 +680,12 @@ static char IsSeparator(unsigned c) {
                 r = m;
             }
         }
-        return !(kAstralGlyphs[l][0] <= c && c <= kAstralGlyphs[l][1]);
+        return !(l < n && kAstralGlyphs[l][0] <= c && c <= kAstralGlyphs[l][1]);
     }
 }
 
 static unsigned Lowercase(unsigned c) {
-    int m, l, r;
+    int m, l, r, n;
     if (c < 0200) {
         if ('A' <= c && c <= 'Z') {
             return c + 32;
@@ -823,7 +836,7 @@ static unsigned Lowercase(unsigned c) {
                 {0xff21, 0xff3a,   +32}, /* 26x Ａ..Ｚ → ａ..ｚ Dubs */
             };
             l = 0;
-            r = sizeof(kLower) / sizeof(kLower[0]);
+            r = n = sizeof(kLower) / sizeof(kLower[0]);
             while (l < r) {
                 m = (l + r) >> 1;
                 if (kLower[m].b < c) {
@@ -832,7 +845,7 @@ static unsigned Lowercase(unsigned c) {
                     r = m;
                 }
             }
-            if (kLower[l].a <= c && c <= kLower[l].b) {
+            if (l < n && kLower[l].a <= c && c <= kLower[l].b) {
                 return c + kLower[l].d;
             } else {
                 return c;
@@ -865,7 +878,7 @@ static unsigned Lowercase(unsigned c) {
             {0x1d790, 0x1d7a0,   -90}, /* 17x 𝞐 ..𝞠  → 𝜶 ..𝝆  Math */
         };
         l = 0;
-        r = sizeof(kAstralLower) / sizeof(kAstralLower[0]);
+        r = n = sizeof(kAstralLower) / sizeof(kAstralLower[0]);
         while (l < r) {
             m = (l + r) >> 1;
             if (kAstralLower[m].b < c) {
@@ -874,7 +887,7 @@ static unsigned Lowercase(unsigned c) {
                 r = m;
             }
         }
-        if (kAstralLower[l].a <= c && c <= kAstralLower[l].b) {
+        if (l < n && kAstralLower[l].a <= c && c <= kAstralLower[l].b) {
             return c + kAstralLower[l].d;
         } else {
             return c;
@@ -883,7 +896,7 @@ static unsigned Lowercase(unsigned c) {
 }
 
 static unsigned Uppercase(unsigned c) {
-    int m, l, r;
+    int m, l, r, n;
     if (c < 0200) {
         if ('a' <= c && c <= 'z') {
             return c - 32;
@@ -997,7 +1010,7 @@ static unsigned Uppercase(unsigned c) {
                 {0xff41, 0xff5a,   -32}, /* 26x ａ..ｚ → Ａ..Ｚ Dubs */
             };
             l = 0;
-            r = sizeof(kUpper) / sizeof(kUpper[0]);
+            r = n = sizeof(kUpper) / sizeof(kUpper[0]);
             while (l < r) {
                 m = (l + r) >> 1;
                 if (kUpper[m].b < c) {
@@ -1006,7 +1019,7 @@ static unsigned Uppercase(unsigned c) {
                     r = m;
                 }
             }
-            if (kUpper[l].a <= c && c <= kUpper[l].b) {
+            if (l < n && kUpper[l].a <= c && c <= kUpper[l].b) {
                 return c + kUpper[l].d;
             } else {
                 return c;
@@ -1039,7 +1052,7 @@ static unsigned Uppercase(unsigned c) {
             {0x1d736, 0x1d790,   -90}, /* 17x 𝜶..𝝆 → 𝞐..𝞠 Math */
         };
         l = 0;
-        r = sizeof(kAstralUpper) / sizeof(kAstralUpper[0]);
+        r = n = sizeof(kAstralUpper) / sizeof(kAstralUpper[0]);
         while (l < r) {
             m = (l + r) >> 1;
             if (kAstralUpper[m].b < c) {
@@ -1048,7 +1061,7 @@ static unsigned Uppercase(unsigned c) {
                 r = m;
             }
         }
-        if (kAstralUpper[l].a <= c && c <= kAstralUpper[l].b) {
+        if (l < n && kAstralUpper[l].a <= c && c <= kAstralUpper[l].b) {
             return c + kAstralUpper[l].d;
         } else {
             return c;
@@ -1058,6 +1071,65 @@ static unsigned Uppercase(unsigned c) {
 
 static char NotSeparator(unsigned c) {
     return !IsSeparator(c);
+}
+
+static unsigned GetMirror(const unsigned short A[][2], size_t n, unsigned c) {
+    int l, m, r;
+    l = 0;
+    r = n - 1;
+    while (l <= r) {
+        m = (l + r) >> 1;
+        if (A[m][0] < c) {
+            l = m + 1;
+        } else if (A[m][0] > c) {
+            r = m - 1;
+        } else {
+            return A[m][1];
+        }
+    }
+    return 0;
+}
+
+static unsigned GetMirrorLeft(unsigned c) {
+    static const unsigned short kMirrorRight[][2] = {
+        {L')', L'('},   {L']', L'['},   {L'}', L'{'},   {L'⁆', L'⁅'},
+        {L'⁾', L'⁽'},   {L'₎', L'₍'},   {L'⌉', L'⌈'},   {L'⌋', L'⌊'},
+        {L'〉', L'〈'}, {L'❩', L'❨'},   {L'❫', L'❪'},   {L'❭', L'❬'},
+        {L'❯', L'❮'},   {L'❱', L'❰'},   {L'❳', L'❲'},   {L'❵', L'❴'},
+        {L'⟆', L'⟅'},   {L'⟧', L'⟦'},   {L'⟩', L'⟨'},   {L'⟫', L'⟪'},
+        {L'⟭', L'⟬'},   {L'⟯', L'⟮'},   {L'⦄', L'⦃'},   {L'⦆', L'⦅'},
+        {L'⦈', L'⦇'},   {L'⦊', L'⦉'},   {L'⦌', L'⦋'},   {L'⦎', L'⦏'},
+        {L'⦐', L'⦍'},   {L'⦒', L'⦑'},   {L'⦔', L'⦓'},   {L'⦘', L'⦗'},
+        {L'⧙', L'⧘'},   {L'⧛', L'⧚'},   {L'⧽', L'⧼'},   {L'﹚', L'﹙'},
+        {L'﹜', L'﹛'}, {L'﹞', L'﹝'}, {L'）', L'（'}, {L'］', L'［'},
+        {L'｝', L'｛'}, {L'｣', L'｢'},
+    };
+    return GetMirror(kMirrorRight,
+                     sizeof(kMirrorRight) / sizeof(kMirrorRight[0]),
+                     c);
+}
+
+static unsigned GetMirrorRight(unsigned c) {
+    static const unsigned short kMirrorLeft[][2] = {
+        {L'(', L')'},   {L'[', L']'},   {L'{', L'}'},   {L'⁅', L'⁆'},
+        {L'⁽', L'⁾'},   {L'₍', L'₎'},   {L'⌈', L'⌉'},   {L'⌊', L'⌋'},
+        {L'〈', L'〉'}, {L'❨', L'❩'},   {L'❪', L'❫'},   {L'❬', L'❭'},
+        {L'❮', L'❯'},   {L'❰', L'❱'},   {L'❲', L'❳'},   {L'❴', L'❵'},
+        {L'⟅', L'⟆'},   {L'⟦', L'⟧'},   {L'⟨', L'⟩'},   {L'⟪', L'⟫'},
+        {L'⟬', L'⟭'},   {L'⟮', L'⟯'},   {L'⦃', L'⦄'},   {L'⦅', L'⦆'},
+        {L'⦇', L'⦈'},   {L'⦉', L'⦊'},   {L'⦋', L'⦌'},   {L'⦍', L'⦐'},
+        {L'⦏', L'⦎'},   {L'⦑', L'⦒'},   {L'⦓', L'⦔'},   {L'⦗', L'⦘'},
+        {L'⧘', L'⧙'},   {L'⧚', L'⧛'},   {L'⧼', L'⧽'},   {L'﹙', L'﹚'},
+        {L'﹛', L'﹜'}, {L'﹝', L'﹞'}, {L'（', L'）'}, {L'［', L'］'},
+        {L'｛', L'｝'}, {L'｢', L'｣'},
+    };
+    return GetMirror(kMirrorLeft,
+                     sizeof(kMirrorLeft) / sizeof(kMirrorLeft[0]),
+                     c);
+}
+
+static char IsXeparator(unsigned c) {
+    return IsSeparator(c) && !GetMirrorLeft(c) && !GetMirrorRight(c);
 }
 
 static unsigned Capitalize(unsigned c) {
@@ -1071,8 +1143,8 @@ static unsigned Capitalize(unsigned c) {
 static inline int Bsr(unsigned long long x) {
 #if defined(__GNUC__) && !defined(__STRICT_ANSI__)
     int b;
-    b = __builtin_clzl(x);
-    b ^= sizeof(long) * CHAR_BIT - 1;
+    b = __builtin_clzll(x);
+    b ^= sizeof(unsigned long long) * CHAR_BIT - 1;
     return b;
 #else
     static const char kDebruijn[64] = {
@@ -1789,8 +1861,8 @@ static int enableRawMode(int fd) {
     struct sigaction sa;
     if (tcgetattr(fd,&orig_termios) != -1) {
         raw = orig_termios;
-        raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP);
-        raw.c_lflag &= ~(ECHO | ICANON | IEXTEN);
+        raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+        raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
         raw.c_oflag &= ~OPOST;
         raw.c_iflag |= IUTF8;
         raw.c_cflag |= CS8;
@@ -1813,8 +1885,16 @@ static int enableRawMode(int fd) {
     return -1;
 }
 
+static void bestlineUnpause(int fd) {
+    if (ispaused) {
+        tcflow(fd, TCOON);
+        ispaused = 0;
+    }
+}
+
 void bestlineDisableRawMode(void) {
     if (rawmode != -1) {
+        bestlineUnpause(rawmode);
         sigaction(SIGCONT,&orig_cont,0);
         sigaction(SIGWINCH,&orig_winch,0);
         tcsetattr(rawmode,TCSAFLUSH,&orig_termios);
@@ -1830,6 +1910,9 @@ static int bestlineWrite(int fd, const void *p, size_t n) {
             if (gotint) {
                 errno = EINTR;
                 return -1;
+            }
+            if (ispaused) {
+                return 0;
             }
             rc = write(fd, p, n);
             if (rc == -1 && errno == EINTR) {
@@ -2181,20 +2264,99 @@ static char *bestlineRefreshHints(struct bestlineState *l) {
     return ab.b;
 }
 
+static size_t Backward(struct bestlineState *l, size_t pos) {
+    if (pos) {
+        do --pos;
+        while (pos && (l->buf[pos] & 0300) == 0200);
+    }
+    return pos;
+}
+
+static int bestlineMirrorLeft(struct bestlineState *l, int res[2]) {
+    unsigned c, pos, left, right, depth, index;
+    if ((pos = Backward(l, l->pos))) {
+        right = GetUtf8(l->buf + pos, l->len - pos).c;
+        if ((left = GetMirrorLeft(right))) {
+            depth = 0;
+            index = pos;
+            do {
+                pos = Backward(l, pos);
+                c = GetUtf8(l->buf + pos, l->len - pos).c;
+                if (c == right) {
+                    ++depth;
+                } else if (c == left) {
+                    if (depth) {
+                        --depth;
+                    } else {
+                        res[0] = pos;
+                        res[1] = index;
+                        return 0;
+                    }
+                }
+            } while (pos);
+        }
+    }
+    return -1;
+}
+
+static int bestlineMirrorRight(struct bestlineState *l, int res[2]) {
+    struct rune rune;
+    unsigned pos, left, right, depth, index;
+    pos = l->pos;
+    rune = GetUtf8(l->buf + pos, l->len - pos);
+    left = rune.c;
+    if ((right = GetMirrorRight(left))) {
+        depth = 0;
+        index = pos;
+        do {
+            pos += rune.n;
+            rune = GetUtf8(l->buf + pos, l->len - pos);
+            if (rune.c == left) {
+                ++depth;
+            } else if (rune.c == right) {
+                if (depth) {
+                    --depth;
+                } else {
+                    res[0] = index;
+                    res[1] = pos;
+                    return 0;
+                }
+            }
+        } while (pos + rune.n < l->len);
+    }
+    return -1;
+}
+
+static int bestlineMirror(struct bestlineState *l, int res[2]) {
+    int rc;
+    rc = bestlineMirrorLeft(l, res);
+    if (rc == -1) rc = bestlineMirrorRight(l, res);
+    return rc;
+}
+
 static void bestlineRefreshLineImpl(struct bestlineState *l, int force) {
     char *hint;
+    char flipit;
+    char hasflip;
     char haswides;
     struct abuf ab;
     const char *buf;
     struct rune rune;
     struct winsize oldsize;
     int fd, plen, rows, len, pos;
-    int i, t, cx, cy, tn, resized;
     unsigned x, xn, yn, width, pwidth;
+    int i, t, cx, cy, tn, resized, flip[2];
 
     /*
      * synchonize the i/o state
      */
+    if (ispaused) {
+        if (force) {
+            bestlineUnpause(l->ofd);
+        } else {
+            return;
+        }
+    }
     if (!force && HasPendingInput(l->ifd)) {
         l->dirty = 1;
         return;
@@ -2204,6 +2366,7 @@ static void bestlineRefreshLineImpl(struct bestlineState *l, int force) {
         gotwinch = 0;
         l->ws = GetTerminalSize(l->ws, l->ifd, l->ofd);
     }
+    hasflip = !l->final && !bestlineMirror(l, flip);
 
 StartOver:
     fd = l->ofd;
@@ -2289,13 +2452,16 @@ StartOver:
         if (maskmode) {
             abAppendw(&ab, '*');
         } else {
+            flipit = hasflip && (i == flip[0] || i == flip[1]);
+            if (flipit) abAppends(&ab, "\033[1m");
             abAppendw(&ab, EncodeUtf8(rune.c));
+            if (flipit) abAppends(&ab, "\033[22m");
         }
         t = GetMonospaceCharacterWidth(rune.c);
         t = Max(0, t);
         x += t;
     }
-    if ((hint = bestlineRefreshHints(l))) {
+    if (!l->final && (hint = bestlineRefreshHints(l))) {
         if (GetMonospaceWidth(hint, strlen(hint), 0) < xn - x) {
             if (cx < 0) {
                 cx = x;
@@ -2405,14 +2571,6 @@ static size_t Forward(struct bestlineState *l, size_t pos) {
     return pos + GetUtf8(l->buf + pos, l->len - pos).n;
 }
 
-static size_t Backward(struct bestlineState *l, size_t pos) {
-    if (pos) {
-        do --pos;
-        while (pos && (l->buf[pos] & 0300) == 0200);
-    }
-    return pos;
-}
-
 static size_t Backwards(struct bestlineState *l, size_t pos, char pred(unsigned)) {
     size_t i;
     struct rune r;
@@ -2490,6 +2648,28 @@ static void bestlineEditLeftWord(struct bestlineState *l) {
 
 static void bestlineEditRightWord(struct bestlineState *l) {
     l->pos = ForwardWord(l, l->pos);
+    bestlineRefreshLine(l);
+}
+
+static void bestlineEditLeftExpr(struct bestlineState *l) {
+    int mark[2];
+    l->pos = Backwards(l, l->pos, IsXeparator);
+    if (!bestlineMirrorLeft(l, mark)) {
+        l->pos = mark[0];
+    } else {
+        l->pos = Backwards(l, l->pos, NotSeparator);
+    }
+    bestlineRefreshLine(l);
+}
+
+static void bestlineEditRightExpr(struct bestlineState *l) {
+    int mark[2];
+    l->pos = Forwards(l, l->pos, IsXeparator);
+    if (!bestlineMirrorRight(l, mark)) {
+        l->pos = Forward(l, mark[1]);
+    } else {
+        l->pos = Forwards(l, l->pos, NotSeparator);
+    }
     bestlineRefreshLine(l);
 }
 
@@ -2679,6 +2859,80 @@ static void bestlineEditGoto(struct bestlineState *l) {
     bestlineRefreshLine(l);
 }
 
+static size_t bestlineEscape(char *d, const char *s, size_t n) {
+    char *p;
+    size_t i;
+    unsigned c, w, l;
+    for (p = d, l = i = 0; i < n; ++i) {
+        switch ((c = s[i] & 255)) {
+            Case('\a', w = Read16le("\\a"));
+            Case('\b', w = Read16le("\\b"));
+            Case('\t', w = Read16le("\\t"));
+            Case('\n', w = Read16le("\\n"));
+            Case('\v', w = Read16le("\\v"));
+            Case('\f', w = Read16le("\\f"));
+            Case('\r', w = Read16le("\\r"));
+            Case('"',  w = Read16le("\\\""));
+            Case('\'', w = Read16le("\\\'"));
+            Case('\\', w = Read16le("\\\\"));
+            default:
+                if (c <= 0x1F || c == 0x7F ||
+                    (c == '?' && l == '?')) {
+                    w = Read16le("\\x");
+                    w |= "0123456789abcdef"[(c & 0xF0) >> 4] << 020;
+                    w |= "0123456789abcdef"[(c & 0x0F) >> 0] << 030;
+                } else {
+                    w = c;
+                }
+                break;
+        }
+        p[0] = (w & 0x000000ff) >> 000;
+        p[1] = (w & 0x0000ff00) >> 010;
+        p[2] = (w & 0x00ff0000) >> 020;
+        p[3] = (w & 0xff000000) >> 030;
+        p += (Bsr(w) >> 3) + 1;
+        l = w;
+    }
+    return p - d;
+}
+
+static void bestlineEditInsertEscape(struct bestlineState *l) {
+    size_t m;
+    ssize_t n;
+    char seq[16];
+    char esc[sizeof(seq) * 4];
+    if ((n = bestlineRead(l->ifd, seq, sizeof(seq), l)) > 0) {
+        m = bestlineEscape(esc, seq, n);
+        bestlineEditInsert(l, esc, m);
+    }
+}
+
+static void bestlineEditInterrupt(void) {
+    gotint = SIGINT;
+}
+
+static void bestlineEditQuit(void) {
+    gotint = SIGQUIT;
+}
+
+static void bestlineEditSuspend(void) {
+    raise(SIGSTOP);
+}
+
+static void bestlineEditPause(struct bestlineState *l) {
+    tcflow(l->ofd, TCOOFF);
+    ispaused = 1;
+}
+
+static void bestlineEditCtrlq(struct bestlineState *l) {
+    if (ispaused) {
+        bestlineUnpause(l->ofd);
+        bestlineRefreshLineForce(l);
+    } else {
+        bestlineEditInsertEscape(l);
+    }
+}
+
 /**
  * Runs bestline engine.
  *
@@ -2697,7 +2951,6 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
     size_t nread;
     char *p, seq[16];
     struct bestlineState l;
-    bestlineHintsCallback *hc;
     memset(&l,0,sizeof(l));
     if (!(l.buf = (char *)malloc((l.buflen = 32)))) return -1;
     l.buf[0] = 0;
@@ -2726,8 +2979,7 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
             seq[0] = '\r';
             seq[1] = 0;
         } else {
-            historylen--;
-            free(history[historylen]);
+            free(history[--historylen]);
             history[historylen] = 0;
             free(l.buf);
             return -1;
@@ -2740,11 +2992,16 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
         Case(Ctrl('B'), bestlineEditLeft(&l));
         Case(Ctrl('@'), bestlineEditMark(&l));
         Case(Ctrl('Y'), bestlineEditYank(&l));
+        Case(Ctrl('Q'), bestlineEditCtrlq(&l));
         Case(Ctrl('F'), bestlineEditRight(&l));
+        Case(Ctrl('\\'), bestlineEditQuit());
+        Case(Ctrl('S'), bestlineEditPause(&l));
         Case(Ctrl('?'), bestlineEditRubout(&l));
         Case(Ctrl('H'), bestlineEditRubout(&l));
         Case(Ctrl('L'), bestlineEditRefresh(&l));
+        Case(Ctrl('Z'), bestlineEditSuspend());
         Case(Ctrl('U'), bestlineEditKillLeft(&l));
+        Case(Ctrl('C'), bestlineEditInterrupt());
         Case(Ctrl('T'), bestlineEditTranspose(&l));
         Case(Ctrl('K'), bestlineEditKillRight(&l));
         Case(Ctrl('W'), bestlineEditRuboutWord(&l));
@@ -2764,13 +3021,11 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
             }
             break;
         case '\r':
+            l.final = 1;
             free(history[--historylen]);
             history[historylen] = 0;
             bestlineEditEnd(&l);
-            hc = hintsCallback;
-            hintsCallback = 0;
             bestlineRefreshLineForce(&l);
-            hintsCallback = hc;
             if ((p = (char *)realloc(l.buf, l.len + 1))) l.buf = p;
             *obuf = l.buf;
             return l.len;
@@ -2789,6 +3044,8 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
             Case('u', bestlineEditUppercaseWord(&l));
             Case('c', bestlineEditCapitalizeWord(&l));
             Case('t', bestlineEditTransposeWords(&l));
+            Case(Ctrl('B'), bestlineEditLeftExpr(&l));
+            Case(Ctrl('F'), bestlineEditRightExpr(&l));
             Case(Ctrl('H'), bestlineEditRuboutWord(&l));
             case '[':
                 if (nread < 3) break;
@@ -2825,6 +3082,31 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
                 Case('D', bestlineEditLeft(&l));
                 Case('H', bestlineEditHome(&l));
                 Case('F', bestlineEditEnd(&l));
+                default:
+                    break;
+                }
+                break;
+            case 033:
+                if (nread < 3) break;
+                switch (seq[2]) {
+                case '[':
+                    if (nread < 4) break;
+                    switch (seq[3]) {
+                        Case('C', bestlineEditRightExpr(&l)); /* \e\e[C alt-right */
+                        Case('D', bestlineEditLeftExpr(&l));  /* \e\e[D alt-left */
+                        default:
+                            break;
+                    }
+                    break;
+                case 'O':
+                    if (nread < 4) break;
+                    switch (seq[3]) {
+                        Case('C', bestlineEditRightExpr(&l)); /* \e\eOC alt-right */
+                        Case('D', bestlineEditLeftExpr(&l));  /* \e\eOD alt-left */
+                        default:
+                            break;
+                    }
+                    break;
                 default:
                     break;
                 }
