@@ -2549,10 +2549,10 @@ static size_t BackwardWord(struct bestlineState *l, size_t pos) {
     return pos;
 }
 
-static size_t EscapeWord(struct bestlineState *l) {
-    size_t i, j;
+static size_t EscapeWord(struct bestlineState *l, size_t i) {
+    size_t j;
     struct rune r;
-    for (i = l->pos; i && i < l->len; i += r.n) {
+    for (; i && i < l->len; i += r.n) {
         if (i < l->len) {
             r = GetUtf8(l->buf + i, l->len - i);
             if (bestlineIsSeparator(r.c)) break;
@@ -2743,6 +2743,7 @@ static void bestlineEditTranspose(struct bestlineState *l) {
     char *q, *p;
     size_t a, b, c;
     b = l->pos;
+    if (b == l->len) --b;
     a = Backward(l, b);
     c = Forward(l, b);
     if (!(a < b && b < c)) return;
@@ -2758,8 +2759,13 @@ static void bestlineEditTranspose(struct bestlineState *l) {
 
 static void bestlineEditTransposeWords(struct bestlineState *l) {
     char *q, *p;
-    size_t pi, xi, xj, yi, yj;
-    pi = EscapeWord(l);
+    size_t i, pi, xi, xj, yi, yj;
+    i = l->pos;
+    if (i == l->len) {
+        i = Backwards(l, i, bestlineIsSeparator);
+        i = Backwards(l, i, bestlineNotSeparator);
+    }
+    pi = EscapeWord(l, i);
     xj = Backwards(l, pi, bestlineIsSeparator);
     xi = Backwards(l, xj, bestlineNotSeparator);
     yi = Forwards(l, pi, bestlineIsSeparator);
