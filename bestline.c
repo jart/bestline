@@ -2375,9 +2375,11 @@ StartOver:
         rune = GetUtf8(buf + i, len - i);
         if (x && x + rune.n > xn) {
             if (cy >= 0) ++cy;
-            abAppends(&ab, "\033[K"  /* clear line forward */
-                           "\r"      /* start of line */
-                           "\n");    /* cursor down unclamped */
+            if (x < xn) {
+                abAppends(&ab, "\033[K");  /* clear line forward */
+            }
+            abAppends(&ab, "\r"   /* start of line */
+                           "\n"); /* cursor down unclamped */
             ++rows;
             x = 0;
         }
