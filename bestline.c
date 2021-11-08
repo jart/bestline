@@ -233,7 +233,7 @@ static const char *const kUnsupported[] = {"dumb","cons25","emacs"};
 static int gotint;
 static int gotcont;
 static int gotwinch;
-static char rawmode;
+static signed char rawmode;
 static char maskmode;
 static char ispaused;
 static char iscapital;
