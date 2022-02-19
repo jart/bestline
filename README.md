@@ -123,7 +123,7 @@ Here's what we've changed compared to
 - Remove heavyweight dependencies like printf/sprintf
 - Remove ISIG→^C→EAGAIN hack and catch signals properly
 - Support running on Windows in MinTTY or CMD.EXE on Win10+
-- Support diacritics, русский, Ελληνικά, 中国人, 日本語, 한국인
+- Support diacritics, русский, Ελληνικά, 漢字, 仮名, 한글
 
 ## Readability
 
@@ -165,7 +165,7 @@ practices used by terminal platforms in the 70's in 80's.
 
 Corporate America has long since moved on to making GUI platforms
 incompatible instead. Even the Windows command prompt supports VT100 and
-XTERM sequences these days. Seriously. It's 2021 and and everyone in the
+XTERM sequences these days. Seriously. It's 2021 and everyone in the
 world finally agrees on UTF-8 and ANSI VT100 style command sequences.
 That's why bestline is now, for the first time in history, able to offer
 you a fully featured experience using simple bloat-free code.
@@ -191,7 +191,7 @@ have to keep the license notice at the top of the file. You also have
 the freedom to distribute your app as a closed-source binary, but you
 have to embed the copyright notice in the executable. We've added an
 `.ident` assembly directive to the top of the source code file which
-should autoamatically take care of binary notice compliance.
+should automatically take care of binary notice compliance.
 
 ```
 The BSD-2 License
