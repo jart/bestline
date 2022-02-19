@@ -3033,7 +3033,7 @@ static void bestlineEditRaise(struct bestlineState *l) {
  * Returns chomped character count in buf >=0 or -1 on eof / error
  */
 static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
-                            char **obuf) {
+                            const char *init, char **obuf) {
     ssize_t rc;
     size_t nread;
     struct rune rune;
@@ -3049,6 +3049,8 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
     l.ws = GetTerminalSize(l.ws,l.ifd,l.ofd);
     bestlineHistoryAdd("");
     bestlineWriteStr(l.ofd,l.prompt);
+    init = init ? init : "";
+    bestlineEditInsert(&l, init, strlen(init));
     while (1) {
         if (l.dirty) bestlineRefreshLineForce(&l);
         rc = bestlineRead(l.ifd,seq,sizeof(seq),&l);
@@ -3347,15 +3349,10 @@ int bestlineHistoryLoad(const char *filename) {
 }
 
 /**
- * Reads line interactively.
- *
- * This function can be used instead of bestline() in cases where we
- * know for certain we're dealing with a terminal, which means we can
- * avoid linking any stdio code.
- *
- * @return chomped allocated string of read line or null on eof/error
+ * Like bestlineRaw, but with the additional parameter init used as the buffer
+ * initial value.
  */
-char *bestlineRaw(const char *prompt, int infd, int outfd) {
+char *bestlineRawInit(const char *prompt, const char *init, int infd, int outfd) {
     char *buf;
     ssize_t rc;
     static char once;
@@ -3369,7 +3366,7 @@ char *bestlineRaw(const char *prompt, int infd, int outfd) {
     sa->sa_handler = bestlineOnInt;
     sigaction(SIGINT,sa,sa+1);
     sigaction(SIGQUIT,sa,sa+2);
-    rc = bestlineEdit(infd,outfd,prompt,&buf);
+    rc = bestlineEdit(infd,outfd,prompt,init,&buf);
     bestlineDisableRawMode();
     sigaction(SIGQUIT,sa+2,0);
     sigaction(SIGINT,sa+1,0);
@@ -3390,20 +3387,24 @@ char *bestlineRaw(const char *prompt, int infd, int outfd) {
 }
 
 /**
- * Reads line intelligently.
+ * Reads line interactively.
  *
- * The high level function that is the main API of the bestline library.
- * This function checks if the terminal has basic capabilities, just checking
- * for a blacklist of inarticulate terminals, and later either calls the line
- * editing function or uses dummy fgets() so that you will be able to type
- * something even in the most desperate of the conditions.
+ * This function can be used instead of bestline() in cases where we
+ * know for certain we're dealing with a terminal, which means we can
+ * avoid linking any stdio code.
  *
- * @param prompt is printed before asking for input if we have a term
- *     and this may be set to empty or null to disable and prompt may
- *     contain ansi escape sequences, color, utf8, etc.
  * @return chomped allocated string of read line or null on eof/error
  */
-char *bestline(const char *prompt) {
+char *bestlineRaw(const char *prompt, int infd, int outfd) {
+    return bestlineRawInit(prompt, "", infd, outfd);
+}
+
+/**
+ * Like bestline, but with the additional parameter init used as the buffer
+ * initial value. The init parameter is only used if the terminal has basic
+ * capabilites.
+ */
+char *bestlineInit(const char *prompt, const char *init) {
     if (prompt && *prompt &&
         (strchr(prompt, '\n') || strchr(prompt, '\t') ||
          strchr(prompt + 1, '\r'))) {
@@ -3426,8 +3427,26 @@ char *bestline(const char *prompt) {
         return GetLine(stdin, stdout);
     } else {
         fflush(stdout);
-        return bestlineRaw(prompt,fileno(stdin),fileno(stdout));
+        return bestlineRawInit(prompt,init,fileno(stdin),fileno(stdout));
     }
+}
+
+/**
+ * Reads line intelligently.
+ *
+ * The high level function that is the main API of the bestline library.
+ * This function checks if the terminal has basic capabilities, just checking
+ * for a blacklist of inarticulate terminals, and later either calls the line
+ * editing function or uses dummy fgets() so that you will be able to type
+ * something even in the most desperate of the conditions.
+ *
+ * @param prompt is printed before asking for input if we have a term
+ *     and this may be set to empty or null to disable and prompt may
+ *     contain ansi escape sequences, color, utf8, etc.
+ * @return chomped allocated string of read line or null on eof/error
+ */
+char *bestline(const char *prompt) {
+    return bestlineInit(prompt, "");
 }
 
 /**
