@@ -2187,12 +2187,10 @@ static void bestlineRingRotate(void) {
 static char *bestlineRefreshHints(struct bestlineState *l) {
     char *hint;
     struct abuf ab;
-    const char *ansi1, *ansi2;
+    const char *ansi1 = "\033[90m", *ansi2 = "\033[39m";
     if (!hintsCallback) return 0;
     if (!(hint = hintsCallback(l->buf, &ansi1, &ansi2))) return 0;
     abInit(&ab);
-    ansi1 = "\033[90m";
-    ansi2 = "\033[39m";
     if (ansi1) abAppends(&ab, ansi1);
     abAppends(&ab, hint);
     if (ansi2) abAppends(&ab, ansi2);
