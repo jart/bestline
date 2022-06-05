@@ -18,7 +18,9 @@ void bestlineAddCompletion(bestlineCompletions *, const char *);
 void bestlineSetXlatCallback(bestlineXlatCallback *);
 
 char *bestline(const char *);
+char *bestlineInit(const char *, const char *);
 char *bestlineRaw(const char *, int, int);
+char *bestlineRawInit(const char *, const char *, int, int);
 char *bestlineWithHistory(const char *, const char *);
 int bestlineHistoryAdd(const char *);
 int bestlineHistorySave(const char *);
