@@ -47,7 +47,7 @@
 │   - Remove heavyweight dependencies like printf/sprintf                      │
 │   - Remove ISIG→^C→EAGAIN hack and use ephemeral handlers                    │
 │   - Support running on Windows in MinTTY or CMD.EXE on Win10+                │
-│   - Support diacratics, русский, Ελληνικά, 中国人, 日本語, 한국인            │
+│   - Support diacratics, русский, Ελληνικά, 漢字, 仮名, 한글                  │
 │                                                                              │
 │ SHORTCUTS                                                                    │
 │                                                                              │
