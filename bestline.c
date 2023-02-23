@@ -88,6 +88,7 @@
 │   ALT-U          UPPERCASE WORD                                              │
 │   ALT-L          LOWERCASE WORD                                              │
 │   ALT-C          CAPITALIZE WORD                                             │
+│   CTRL-C CTRL-C  INTERRUPT PROCESS                                           │
 │   CTRL-Z         SUSPEND PROCESS                                             │
 │   CTRL-\         QUIT PROCESS                                                │
 │   CTRL-S         PAUSE OUTPUT                                                │
@@ -143,6 +144,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ctype.h>
+#include <sys/time.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/ioctl.h>
@@ -176,10 +178,8 @@ Copyright 2010-2013 Pieter Noordhuis <pcnoordhuis@gmail.com>\"");
 #define BESTLINE_MAX_HISTORY 1024
 #endif
 
-#define BESTLINE_HISTORY_FIRST +BESTLINE_MAX_HISTORY
 #define BESTLINE_HISTORY_PREV  +1
 #define BESTLINE_HISTORY_NEXT  -1
-#define BESTLINE_HISTORY_LAST  -BESTLINE_MAX_HISTORY
 
 #define Ctrl(C)    ((C) ^ 0100)
 #define Min(X, Y)  ((Y) > (X) ? (X) : (Y))
@@ -1799,7 +1799,6 @@ static int enableRawMode(int fd) {
         raw = orig_termios;
         raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
         raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-        raw.c_oflag &= ~OPOST;
         raw.c_iflag |= IUTF8;
         raw.c_cflag |= CS8;
         raw.c_cc[VMIN] = 1;
@@ -2045,6 +2044,8 @@ static ssize_t bestlineCompleteLine(struct bestlineState *ls, char *seq, int siz
 static void bestlineEditHistoryGoto(struct bestlineState *l, unsigned i) {
     size_t n;
     if (historylen <= 1) return;
+    if (i < 0) return;
+    if (i > historylen-1) return;
     i = Max(Min(i,historylen-1),0);
     free(history[historylen - 1 - l->hindex]);
     history[historylen - 1 - l->hindex] = strdup(l->buf);
@@ -2491,11 +2492,11 @@ static void bestlineEditDown(struct bestlineState *l) {
 }
 
 static void bestlineEditBof(struct bestlineState *l) {
-    bestlineEditHistoryMove(l,BESTLINE_HISTORY_FIRST);
+    bestlineEditHistoryGoto(l,historylen-1);
 }
 
 static void bestlineEditEof(struct bestlineState *l) {
-    bestlineEditHistoryMove(l,BESTLINE_HISTORY_LAST);
+    bestlineEditHistoryGoto(l,0);
 }
 
 static void bestlineEditRefresh(struct bestlineState *l) {
@@ -3018,6 +3019,15 @@ static void bestlineEditRaise(struct bestlineState *l) {
     (void)l;
 }
 
+static char IsBalanced(struct bestlineState *l) {
+    int i, d;
+    for (d = i = 0; i < l->len; ++i) {
+        if (l->buf[i] == '(') ++d;
+        if (l->buf[i] == ')') --d;
+    }
+    return d <= 0;
+}
+
 /**
  * Runs bestline engine.
  *
@@ -3120,14 +3130,17 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
             }
             break;
         case '\r':
-            l.final = 1;
-            free(history[--historylen]);
-            history[historylen] = 0;
-            bestlineEditEnd(&l);
-            bestlineRefreshLineForce(&l);
-            if ((p = (char *)realloc(l.buf, l.len + 1))) l.buf = p;
-            *obuf = l.buf;
-            return l.len;
+            if (IsBalanced(&l)) {
+                l.final = 1;
+                free(history[--historylen]);
+                history[historylen] = 0;
+                bestlineEditEnd(&l);
+                bestlineRefreshLineForce(&l);
+                if ((p = (char *)realloc(l.buf, l.len + 1))) l.buf = p;
+                *obuf = l.buf;
+                return l.len;
+            }
+            break;
         case 033:
             if (nread < 2) break;
             switch (seq[1]) {
@@ -3375,8 +3388,8 @@ char *bestlineRawInit(const char *prompt, const char *init, int infd, int outfd)
         errno = EINTR;
         rc = -1;
     }
+    bestlineWriteStr(outfd,"\r\n");
     if (rc != -1) {
-        bestlineWriteStr(outfd,"\n");
         return buf;
     } else {
         free(buf);
