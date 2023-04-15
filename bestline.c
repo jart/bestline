@@ -2044,7 +2044,6 @@ static ssize_t bestlineCompleteLine(struct bestlineState *ls, char *seq, int siz
 static void bestlineEditHistoryGoto(struct bestlineState *l, unsigned i) {
     size_t n;
     if (historylen <= 1) return;
-    if (i < 0) return;
     if (i > historylen-1) return;
     i = Max(Min(i,historylen-1),0);
     free(history[historylen - 1 - l->hindex]);
@@ -3020,7 +3019,7 @@ static void bestlineEditRaise(struct bestlineState *l) {
 }
 
 static char IsBalanced(struct bestlineState *l) {
-    int i, d;
+    unsigned i, d;
     for (d = i = 0; i < l->len; ++i) {
         if (l->buf[i] == '(') ++d;
         if (l->buf[i] == ')') --d;
