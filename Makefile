@@ -1,13 +1,14 @@
 all: bestline_example
 
-bestline_example: bestline.o example.o
-	$(CC) $(LDFLAGS) bestline.o example.o -o $@
+bestline_example: bestline.o example.o wcwidth.o
+	$(CC) $(LDFLAGS) bestline.o wcwidth.o example.o -o $@
 
 bestline.o: bestline.c bestline.h Makefile
 example.o: example.c bestline.h Makefile
+wcwidth.o: wcwidth.c Makefile
 
 clean:
-	rm -f bestline_example bestline.o example.o bestline_example.com bestline_example.com.dbg
+	rm -f bestline_example bestline.o example.o wcwdith.o bestline_example.com bestline_example.com.dbg
 
 ################################################################################
 # compile on linux the demo as a binary that runs on seven operating systems

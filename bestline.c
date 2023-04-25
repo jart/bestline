@@ -210,6 +210,9 @@ struct bestlineRing {
     char *p[BESTLINE_MAX_RING];
 };
 
+/* Function to calculate the wide-character width for a Rune */
+extern int wcwidth(int c);
+
 /* The bestlineState structure represents the state during line editing.
  * We pass this state to functions implementing specific editing
  * functionalities. */
@@ -273,18 +276,8 @@ static char IsControl(unsigned c) {
 }
 
 static int GetMonospaceCharacterWidth(unsigned c) {
-    return !IsControl(c)
-            + (c >= 0x1100 &&
-               (c <= 0x115f || c == 0x2329 || c == 0x232a ||
-                (c >= 0x2e80 && c <= 0xa4cf && c != 0x303f) ||
-                (c >= 0xac00 && c <= 0xd7a3) ||
-                (c >= 0xf900 && c <= 0xfaff) ||
-                (c >= 0xfe10 && c <= 0xfe19) ||
-                (c >= 0xfe30 && c <= 0xfe6f) ||
-                (c >= 0xff00 && c <= 0xff60) ||
-                (c >= 0xffe0 && c <= 0xffe6) ||
-                (c >= 0x20000 && c <= 0x2fffd) ||
-                (c >= 0x30000 && c <= 0x3fffd)));
+    /* Simply delegate to wcwidth */
+    return wcwidth(c);
 }
 
 /**
@@ -2372,7 +2365,19 @@ StartOver:
     x = pwidth;
     for (i = 0; i < len; i += rune.n) {
         rune = GetUtf8(buf + i, len - i);
-        if (x && x + rune.n > xn) {
+        if (maskmode) {
+            abAppendw(&ab, '*');
+            t = 1;
+        } else {
+            flipit = hasflip && (i == flip[0] || i == flip[1]);
+            if (flipit) abAppends(&ab, "\033[1m");
+            abAppendw(&ab, EncodeUtf8(rune.c));
+            if (flipit) abAppends(&ab, "\033[22m");
+            t = GetMonospaceCharacterWidth(rune.c);
+            t = Max(0, t);
+        }
+        x += t;
+        if (x && x + 1 > xn) {
             if (cy >= 0) ++cy;
             if (x < xn) {
                 abAppends(&ab, "\033[K");  /* clear line forward */
@@ -2386,17 +2391,6 @@ StartOver:
             cy = 0;
             cx = x;
         }
-        if (maskmode) {
-            abAppendw(&ab, '*');
-        } else {
-            flipit = hasflip && (i == flip[0] || i == flip[1]);
-            if (flipit) abAppends(&ab, "\033[1m");
-            abAppendw(&ab, EncodeUtf8(rune.c));
-            if (flipit) abAppends(&ab, "\033[22m");
-        }
-        t = GetMonospaceCharacterWidth(rune.c);
-        t = Max(0, t);
-        x += t;
     }
     if (!l->final && (hint = bestlineRefreshHints(l))) {
         if (GetMonospaceWidth(hint, strlen(hint), 0) < xn - x) {
