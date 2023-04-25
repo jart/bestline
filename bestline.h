@@ -30,6 +30,7 @@ void bestlineHistoryFree(void);
 void bestlineClearScreen(int);
 void bestlineMaskModeEnable(void);
 void bestlineMaskModeDisable(void);
+void bestlineBalanceMode(char);
 void bestlineDisableRawMode(void);
 void bestlineFree(void *);
 

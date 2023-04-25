@@ -239,6 +239,7 @@ static int gotcont;
 static int gotwinch;
 static signed char rawmode;
 static char maskmode;
+static char balancemode;
 static char ispaused;
 static char iscapital;
 static unsigned historylen;
@@ -3129,7 +3130,7 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt,
             }
             break;
         case '\r':
-            if (IsBalanced(&l)) {
+            if (!balancemode || IsBalanced(&l)) {
                 l.final = 1;
                 free(history[--historylen]);
                 history[historylen] = 0;
@@ -3606,4 +3607,14 @@ void bestlineMaskModeEnable(void) {
  */
 void bestlineMaskModeDisable(void) {
     maskmode = 0;
+}
+
+/**
+ * Enables or disables "balance mode".
+ *
+ * When it is enabled, bestline() will block until parentheses are
+ * balanced. This is useful for code but not for free text.
+ */
+void bestlineBalanceMode(char mode) {
+    balancemode = mode;
 }
