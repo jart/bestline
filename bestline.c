@@ -3612,13 +3612,22 @@ void bestlineMaskModeDisable(void) {
 }
 
 /**
- * Enables or disables "balance mode".
+ * Enables "balance mode".
  *
  * When it is enabled, bestline() will block until parentheses are
  * balanced. This is useful for code but not for free text.
+ *
+ * @see bestlineBalanceModeDisable()
  */
-void bestlineBalanceMode(char mode) {
-    balancemode = mode;
+void bestlineBalanceModeEnable(void) {
+    balancemode = 1;
+}
+
+/**
+ * Disables "balance mode".
+ */
+void bestlineBalanceModeDisable(void) {
+    balancemode = 0;
 }
 
 /**
