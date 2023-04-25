@@ -3022,9 +3022,9 @@ static char IsBalanced(struct bestlineState *l) {
     unsigned i, d;
     for (d = i = 0; i < l->len; ++i) {
         if (l->buf[i] == '(') ++d;
-        if (l->buf[i] == ')') --d;
+        else if (d > 0 && l->buf[i] == ')') --d;
     }
-    return d <= 0;
+    return d == 0;
 }
 
 /**
