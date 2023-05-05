@@ -1305,18 +1305,20 @@ static char IsCharDev(int fd) {
     return (st.st_mode & S_IFMT) == S_IFCHR;
 }
 
+static int MyRead(int fd, void *c, int);
+static int MyWrite(int fd, const void *c, int);
+static int MyPoll(int fd, int events, int to);
+
+static int (*_MyRead)(int fd, void *c, int n) = MyRead;
+static int (*_MyWrite)(int fd, const void *c, int n) = MyWrite;
+static int (*_MyPoll)(int fd, int events, int to) = MyPoll;
+
 static int WaitUntilReady(int fd, int events) {
-    struct pollfd p[1];
-    p[0].fd = fd;
-    p[0].events = events;
-    return poll(p, 1, -1);
+    return _MyPoll(fd, events, -1);
 }
 
 static char HasPendingInput(int fd) {
-    struct pollfd p[1];
-    p[0].fd = fd;
-    p[0].events = POLLIN;
-    return poll(p, 1, 0) == 1;
+    return _MyPoll(fd, POLLIN, 0) == 1;
 }
 
 static char *GetLineBlock(FILE *f) {
@@ -1358,9 +1360,9 @@ long bestlineReadCharacter(int fd, char *p, unsigned long n) {
                 return -1;
             }
             if (n) {
-                rc = read(fd,&c,1);
+                rc = _MyRead(fd,&c,1);
             } else {
-                rc = read(fd,0,0);
+                rc = _MyRead(fd,0,0);
             }
             if (rc == -1 && errno == EINTR) {
                 if (!i) {
@@ -1607,7 +1609,7 @@ static char *GetLineChar(int fin, int fout) {
                     break;
                 }
             } else {
-                write(fout, "\n", 1);
+                _MyWrite(fout, "\n", 1);
                 break;
             }
         } else if (seq[0] == Ctrl('D')) {
@@ -1850,7 +1852,7 @@ static int bestlineWrite(int fd, const void *p, size_t n) {
             if (ispaused) {
                 return 0;
             }
-            rc = write(fd, p, n);
+            rc = _MyWrite(fd, p, n);
             if (rc == -1 && errno == EINTR) {
                 continue;
             } else if (rc == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
@@ -3617,4 +3619,30 @@ void bestlineMaskModeDisable(void) {
  */
 void bestlineBalanceMode(char mode) {
     balancemode = mode;
+}
+
+/**
+ * Allows implementation of user functions for read, write, and poll
+ * with the intention of polling for background I/O.
+ */
+
+static int MyRead(int fd, void *c, int n) {
+    return read(fd, c, n);
+}
+
+static int MyWrite(int fd, const void *c, int n) {
+    return write(fd, c, n);
+}
+
+static int MyPoll(int fd, int events, int to) {
+    struct pollfd p[1];
+    p[0].fd = fd;
+    p[0].events = events;
+    return poll(p, 1, to);
+}
+
+void bestlineUserIO(void *userReadFn, void *userWriteFn, void *userPollFn) {
+    if (userReadFn)  _MyRead  = userReadFn;   else _MyRead  = MyRead;
+    if (userWriteFn) _MyWrite = userWriteFn;  else _MyWrite = MyWrite;
+    if (userPollFn)  _MyPoll  = userPollFn;   else _MyPoll  = MyPoll;
 }
