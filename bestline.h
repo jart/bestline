@@ -31,6 +31,7 @@ void bestlineClearScreen(int);
 void bestlineMaskModeEnable(void);
 void bestlineMaskModeDisable(void);
 void bestlineBalanceMode(char);
+void bestlineUserIO(void *userReadFn, void *userWriteFn, void *userPollFn);
 void bestlineDisableRawMode(void);
 void bestlineFree(void *);
 
