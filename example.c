@@ -69,9 +69,9 @@ int main(int argc, char **argv) {
         } else if (!strncmp(line, "/unmask", 7)) {
             bestlineMaskModeDisable();
         } else if (!strncmp(line, "/balance", 8)) {
-            bestlineBalanceMode(1);
+            bestlineBalanceModeEnable();
         } else if (!strncmp(line, "/unbalance", 10)) {
-            bestlineBalanceMode(0);
+            bestlineBalanceModeDisable();
         } else if (line[0] == '/') {
             fputs("Unreconized command: ", stdout);
             fputs(line, stdout);
