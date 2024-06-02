@@ -21,7 +21,8 @@ int main() {
 }
 #endif
 
-void completion(const char *buf, bestlineCompletions *lc) {
+void completion(const char *buf, int pos, bestlineCompletions *lc) {
+    (void) pos;
     if (buf[0] == 'h') {
         bestlineAddCompletion(lc,"hello");
         bestlineAddCompletion(lc,"hello there");
@@ -55,7 +56,7 @@ int main(int argc, char **argv) {
      *
      * The typed string is returned as a malloc() allocated string by
      * bestline, so the user needs to free() it. */
-    
+
     while((line = bestline("hello> ")) != NULL) {
         /* Do something with the string. */
         if (line[0] != '\0' && line[0] != '/') {

@@ -2010,7 +2010,7 @@ static ssize_t bestlineCompleteLine(struct bestlineState *ls, char *seq, int siz
     struct bestlineState saved;
     nread = 0;
     memset(&lc, 0, sizeof(lc));
-    completionCallback(ls->buf, &lc);
+    completionCallback(ls->buf, ls->pos, &lc);
     if (!lc.len) {
         bestlineBeep();
     } else {
