@@ -10,6 +10,9 @@ bestline.o: bestline.c bestline.h Makefile
 example.o: example.c bestline.h Makefile
 multi.o: multi.c bestline.h Makefile
 
+libbestline.so: bestline.c
+	$(CC) $(LDFLAGS) -fPIC -shared bestline.c -o $@
+
 clean:
 	rm -f bestline_example bestline.o example.o bestline_example.com bestline_example.com.dbg multi.o bestline_multi
 
