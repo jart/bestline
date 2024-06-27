@@ -14,7 +14,7 @@ libbestline.so: bestline.c
 	$(CC) $(LDFLAGS) -fPIC -shared bestline.c -o $@
 
 clean:
-	rm -f bestline_example bestline.o example.o bestline_example.com bestline_example.com.dbg multi.o bestline_multi
+	rm -f bestline_example bestline.o example.o bestline_example.com bestline_example.com.dbg multi.o bestline_multi libbestline.so
 
 ################################################################################
 # compile on linux the demo as a binary that runs on seven operating systems
