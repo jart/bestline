@@ -132,7 +132,6 @@
 ╚─────────────────────────────────────────────────────────────────────────────*/
 #include "bestline.h"
 
-#ifndef __COSMOPOLITAN__
 #define _POSIX_C_SOURCE  1 /* so GCC builds in ANSI mode */
 #define _XOPEN_SOURCE  700 /* so GCC builds in ANSI mode */
 #define _DARWIN_C_SOURCE 1 /* so SIGWINCH / IUTF8 on XNU */
@@ -161,7 +160,6 @@
 #endif
 #ifndef IUTF8
 #define IUTF8 0
-#endif
 #endif
 
 __asm__(".ident\t\"\\n\\n\
