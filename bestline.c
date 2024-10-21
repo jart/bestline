@@ -3101,6 +3101,7 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt, con
                             char **obuf) {
     ssize_t rc;
     char seq[16];
+    const char *promptnotnull, *promptlastnl;
     size_t nread;
     int pastemode;
     struct rune rune;
@@ -3113,11 +3114,13 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt, con
     l.buf[0] = 0;
     l.ifd = stdin_fd;
     l.ofd = stdout_fd;
-    l.prompt = prompt ? prompt : "";
+    promptnotnull = prompt ? prompt : "";
+    promptlastnl = strrchr(promptnotnull, '\n');
+    l.prompt = promptlastnl ? promptlastnl + 1 : promptnotnull;
     l.ws = GetTerminalSize(l.ws, l.ifd, l.ofd);
     abInit(&l.full);
     bestlineHistoryAdd("");
-    bestlineWriteStr(l.ofd, l.prompt);
+    bestlineWriteStr(l.ofd, promptnotnull);
     init = init ? init : "";
     bestlineEditInsert(&l, init, strlen(init));
     while (1) {
@@ -3553,7 +3556,7 @@ char *bestlineRaw(const char *prompt, int infd, int outfd) {
  */
 char *bestlineInit(const char *prompt, const char *init) {
     if (prompt && *prompt &&
-        (strchr(prompt, '\n') || strchr(prompt, '\t') || strchr(prompt + 1, '\r'))) {
+        (strchr(prompt, '\t') || strchr(prompt + 1, '\r'))) {
         errno = EINVAL;
         return 0;
     }
