@@ -64,6 +64,7 @@
 │   CTRL-P         PREVIOUS HISTORY                                            │
 │   CTRL-R         SEARCH HISTORY                                              │
 │   CTRL-G         CANCEL SEARCH                                               │
+│   CTRL-J         INSERT NEWLINE                                              │
 │   ALT-<          BEGINNING OF HISTORY                                        │
 │   ALT->          END OF HISTORY                                              │
 │   ALT-F          FORWARD WORD                                                │
@@ -3207,11 +3208,20 @@ static ssize_t bestlineEdit(int stdin_fd, int stdout_fd, const char *prompt, con
                 return -1;
             }
             break;
-        case '\r':
-            if (nread >= 2 && seq[1] == '\n')
-                memmove(seq, seq + 1, --nread);
-        // fallthrough
-        case '\n': {
+        case '\n':
+            l.final = 1;
+            bestlineEditEnd(&l);
+            bestlineRefreshLineForce(&l);
+            l.final = 0;
+            abAppend(&l.full, l.buf, l.len);
+            l.prompt = "... ";
+            abAppends(&l.full, "\n");
+            l.len = 0;
+            l.pos = 0;
+            bestlineWriteStr(stdout_fd, "\r\n");
+            bestlineRefreshLineForce(&l);
+            break;
+        case '\r': {
             char is_finished = 1;
             char needs_strip = 0;
             if (historylen) {
@@ -3555,8 +3565,7 @@ char *bestlineRaw(const char *prompt, int infd, int outfd) {
  * capabilites.
  */
 char *bestlineInit(const char *prompt, const char *init) {
-    if (prompt && *prompt &&
-        (strchr(prompt, '\t') || strchr(prompt + 1, '\r'))) {
+    if (prompt && *prompt && (strchr(prompt, '\t') || strchr(prompt + 1, '\r'))) {
         errno = EINVAL;
         return 0;
     }
