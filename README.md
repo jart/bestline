@@ -1,22 +1,23 @@
 # Bestline
 
 Library for interactive pseudoteletypewriter command
-sessions using ANSI Standard X3.64 control sequences
+sessions using ANSI Standard X3.64 control sequences.
 
 ![Bestline Demo Video GIF](bestline.gif)
 
 ## Overview
 
-This is a single-file no-dependencies C or C++ library that makes it as
+This is a single-file, no-dependencies C or C++ library that makes it as
 easy as possible to display a command prompt that asks the user for
 input. It supports Emacs editing shortcuts, history search, completion /
-hint callback, and utf-8 editing under a bsd-2 license.
+hint callback, and UTF-8 editing under a BSD-2 license.
 
-Bestline is a fork of linenoise (a popular readline alternative) that
-fixes its bugs and adds the missing features while reducing binary
-footprint (surprisingly) by removing bloated dependencies, which means
-you can finally have a permissively-licensed command prompt w/ a 38kb
-footprint that's nearly as good as gnu readline.
+Bestline is a fork of [linenoise](https://github.com/antirez/linenoise/)
+(a popular GNU Readline alternative) that fixes its bugs and adds the
+missing features while reducing binary footprint (surprisingly) by
+removing bloated dependencies, which means you can finally have a
+permissively-licensed command prompt w/ a 38kb footprint that's nearly
+as good as GNU Readline.
 
 ```
 $ CC="cc -s -static -Os -DNDEBUG" make
@@ -119,7 +120,7 @@ Here's what we've changed compared to
 - Restore raw mode on process foregrounding
 - Make source code compatible with C++ compilers
 - Fix corruption issues by using generalized parsing
-- Implement nearly all GNU readline editing shortcuts
+- Implement nearly all GNU Readline editing shortcuts
 - Remove heavyweight dependencies like printf/sprintf
 - Remove ISIG→^C→EAGAIN hack and catch signals properly
 - Support running on Windows in MinTTY or CMD.EXE on Win10+
@@ -127,23 +128,23 @@ Here's what we've changed compared to
 
 ## Readability
 
-This codebase aims to follow in Antirez's tradition of writing beautiful
+This codebase aims to follow in antirez's tradition of writing beautiful
 programs, that solve extremely difficult technical problems in the most
 elegant way possible. The original Linenoise source code is sort of like
-an old Delorean where it's simple and beautiful, but has a lot of things
+an old DeLorean where it's simple and beautiful, but has a lot of things
 broken about it that need to be fixed, which gives you plenty of reasons
 to sit down and fix things to fully appreciate its beauty.
 
-There are, however, some differences in style. Antirez generally optimizes
+There are, however, some differences in style. antirez generally optimizes
 for fewer lines of code even if it makes the binary footprint larger and
 with poor edge case handling and cultural biases presumably to preserve
 its accessibility and value as an educational tool. For example, one of
 the biggest issues with Linenoise, was that pressing the wrong key on
 the keyboard would mess with the state and garble input since it didn't
-actually parse ansi codes or even multibyte characters.
+actually parse ANSI codes or even multibyte characters.
 
 While this project has addressed many of Linenoise's shortcomings, we've
-sought to do it in a way that carries on the Antirez tradition of simple
+sought to do it in a way that carries on the antirez's tradition of simple
 elegant hackable code. It is our hope that should you find opportunities
 for improvement in this codebase that you'll find it equally pleasurable
 to work with.
@@ -156,25 +157,25 @@ on any operating system including Windows.
 
 Portability across terminals is achieved because literally everything
 these days supports VT100 control codes which were standardized by ANSI
-back in the 1970's. This library ignores platform-specific norms for
+back in the 1970s. This library ignores platform-specific norms for
 multibyte encoding and it also ignores antiquated terminal capability
 databases. Libraries like ncurses were designed to reduce bandwidth on
 300 bit per second modems. They're bloated and huge because they needed
 to implement workarounds to all the "incompatible by design" engineering
-practices used by terminal platforms in the 70's in 80's.
+practices used by terminal platforms in the '70s in '80s.
 
 Corporate America has long since moved on to making GUI platforms
 incompatible instead. Even the Windows command prompt supports VT100 and
 XTERM sequences these days. Seriously. It's 2021 and everyone in the
 world finally agrees on UTF-8 and ANSI VT100 style command sequences.
-That's why bestline is now, for the first time in history, able to offer
+That's why Bestline is now, for the first time in history, able to offer
 you a fully featured experience using simple bloat-free code.
 
 ## Contributing
 
 We'd love to accept your pull requests! Please send an email beforehand
 to Justine Tunney <jtunney@gmail.com> saying that you intend to assign
-her the copyright to the changes you contribute to bestline.
+her the copyright to the changes you contribute to Bestline.
 
 Please do not contribute changes that have `#ifdef` statements. We don't
 care if MSVC printed a warning, and we won't accept Windows torture code
