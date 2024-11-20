@@ -74,9 +74,9 @@ int main(int argc, char **argv) {
         } else if (!strncmp(line, "/unbalance", 10)) {
             bestlineBalanceMode(0);
         } else if (line[0] == '/') {
-            fputs("Unreconized command: ", stdout);
+            fputs("Unreconized command: '", stdout);
             fputs(line, stdout);
-            fputs("\n", stdout);
+            fputs("'\n", stdout);
         }
         free(line);
     }
