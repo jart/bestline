@@ -24,13 +24,13 @@ int main() {
 void completion(const char *buf, int pos, bestlineCompletions *lc) {
     (void) pos;
     if (buf[0] == 'h') {
-        bestlineAddCompletion(lc,"hello");
-        bestlineAddCompletion(lc,"hello there");
+        bestlineAddCompletion(lc, "hello");
+        bestlineAddCompletion(lc, "hello there");
     }
 }
 
 char *hints(const char *buf, const char **ansi1, const char **ansi2) {
-    if (!strcmp(buf,"hello")) {
+    if (!strcmp(buf, "hello")) {
         *ansi1 = "\033[35m"; /* magenta foreground */
         *ansi2 = "\033[39m"; /* reset foreground */
         return " World";
@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
      * The typed string is returned as a malloc() allocated string by
      * bestline, so the user needs to free() it. */
 
-    while((line = bestline("hello> ")) != NULL) {
+    while ((line = bestline("hello> ")) != NULL) {
         /* Do something with the string. */
         if (line[0] != '\0' && line[0] != '/') {
             fputs("echo: '", stdout);
