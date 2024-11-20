@@ -3756,6 +3756,8 @@ void bestlineMaskModeEnable(void) {
 
 /**
  * Disables "mask mode".
+ *
+ * @see bestlineMaskModeEnable()
  */
 void bestlineMaskModeDisable(void) {
     maskmode = 0;
