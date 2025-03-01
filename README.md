@@ -144,7 +144,7 @@ the keyboard would mess with the state and garble input since it didn't
 actually parse ANSI codes or even multibyte characters.
 
 While this project has addressed many of Linenoise's shortcomings, we've
-sought to do it in a way that carries on the antirez's tradition of simple
+sought to do it in a way that carries on antirez's tradition of simple
 elegant hackable code. It is our hope that should you find opportunities
 for improvement in this codebase that you'll find it equally pleasurable
 to work with.
@@ -162,11 +162,11 @@ multibyte encoding and it also ignores antiquated terminal capability
 databases. Libraries like ncurses were designed to reduce bandwidth on
 300 bit per second modems. They're bloated and huge because they needed
 to implement workarounds to all the "incompatible by design" engineering
-practices used by terminal platforms in the '70s in '80s.
+practices used by terminal platforms in the '70s and '80s.
 
 Corporate America has long since moved on to making GUI platforms
 incompatible instead. Even the Windows command prompt supports VT100 and
-XTERM sequences these days. Seriously. It's 2021 and everyone in the
+XTERM sequences these days. Seriously. It's 2025 and everyone in the
 world finally agrees on UTF-8 and ANSI VT100 style command sequences.
 That's why Bestline is now, for the first time in history, able to offer
 you a fully featured experience using simple bloat-free code.
