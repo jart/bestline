@@ -539,7 +539,7 @@ int bestlineCharacterWidth(int c) {
  * other things like blocks and emoji (So).
  */
 char bestlineIsSeparator(unsigned c) {
-    int m, l, r, n;
+    int l, r, n;
     if (c < 0200) {
         return !(('0' <= c && c <= '9') || ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z'));
     }
